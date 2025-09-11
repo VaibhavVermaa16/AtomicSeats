@@ -5,7 +5,8 @@ import dotenv from 'dotenv';
 import session from 'express-session';
 import cookieParser from 'cookie-parser';
 
-import routes  from './routes/index.js';
+import userRoutes  from './routes/user.routes.js';
+import eventsRoutes from './routes/events.routes.js';
 import middleware from './middleware/index.js';
 
 dotenv.config();
@@ -40,7 +41,8 @@ app.get('/health', (req, res) => {
 });
 
 // API routes
-app.use('/api', routes);
+app.use('/api/user', userRoutes);
+app.use('/api/events', eventsRoutes);
 
 // 404 handler
 app.use((req, res) => {

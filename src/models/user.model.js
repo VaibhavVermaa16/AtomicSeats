@@ -22,36 +22,6 @@ const user = table('users', {
     refreshToken: varchar({ length: 512 }), // for auth refresh tokens
 });
 
-// Events table
-const event = table('event', {
-    id: integer().primaryKey().generatedAlwaysAsIdentity(),
-    hostId: integer()
-        .notNull()
-        .references(() => user.id, { onDelete: 'cascade' }), // who is hosting
-
-    venue: varchar({ length: 512 }).notNull(),
-    startsAt: timestamp().notNull(),
-    endsAt: timestamp().notNull(),
-
-    capacity: integer().notNull(),
-    reservedSeats: integer().default(0),
-});
-
-// Bookings table
-const booking = table('booking', {
-    id: integer().primaryKey().generatedAlwaysAsIdentity(),
-    userId: integer()
-        .notNull()
-        .references(() => user.id, { onDelete: 'cascade' }),
-    eventId: integer()
-        .notNull()
-        .references(() => event.id, { onDelete: 'cascade' }),
-
-    cost: integer().notNull(),
-    createdAt: timestamp().defaultNow(),
-    updatedAt: timestamp().defaultNow(),
-});
-
 // User → Events
 // A host user can have many events (events.hostId links to users.id).
 // → for eventsHostedByUser, just query events where hostId = user.id.
@@ -98,8 +68,6 @@ function generateRefreshToken(userId) {
 
 export {
     user,
-    event,
-    booking,
     hashPassword,
     isPasswordCorrect,
     generateAccessToken,
