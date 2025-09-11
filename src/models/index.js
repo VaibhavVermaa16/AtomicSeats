@@ -1,167 +1,108 @@
-const { pool } = require('../config/database');
+import {
+    pgEnum,
+    pgTable as table,
+    varchar,
+    integer,
+    timestamp,
+} from 'drizzle-orm/pg-core';
+import bcrypt from 'bcryptjs';
+import jwt from 'jsonwebtoken';
 
-// Base model class with common database operations
-class BaseModel {
-  constructor(tableName) {
-    this.tableName = tableName;
-    this.db = pool;
-  }
+// Enums
+const rolesEnum = pgEnum('roles', ['guest', 'host', 'admin']);
 
-  // Find all records
-  async findAll(conditions = {}, limit = 100, offset = 0) {
-    try {
-      let query = `SELECT * FROM ${this.tableName}`;
-      const values = [];
+// Users table
+const user = table('users', {
+    id: integer().primaryKey().generatedAlwaysAsIdentity(),
+    username: varchar({ length: 128 }).notNull().unique(),
+    name: varchar({ length: 256 }).notNull(),
+    email: varchar({ length: 256 }).notNull().unique(),
+    password: varchar({ length: 256 }).notNull(),
+    role: rolesEnum().default('guest'),
+    refreshToken: varchar({ length: 512 }), // for auth refresh tokens
+});
 
-      if (Object.keys(conditions).length > 0) {
-        const whereClause = Object.keys(conditions)
-          .map((key, index) => `${key} = $${index + 1}`)
-          .join(' AND ');
-        query += ` WHERE ${whereClause}`;
-        values.push(...Object.values(conditions));
-      }
+// Events table
+const event = table('event', {
+    id: integer().primaryKey().generatedAlwaysAsIdentity(),
+    hostId: integer()
+        .notNull()
+        .references(() => user.id, { onDelete: 'cascade' }), // who is hosting
 
-      query += ` LIMIT $${values.length + 1} OFFSET $${values.length + 2}`;
-      values.push(limit, offset);
+    venue: varchar({ length: 512 }).notNull(),
+    startsAt: timestamp().notNull(),
+    endsAt: timestamp().notNull(),
 
-      const result = await this.db.query(query, values);
-      return result.rows;
-    } catch (error) {
-      throw new Error(`Error finding records: ${error.message}`);
-    }
-  }
+    capacity: integer().notNull(),
+    reservedSeats: integer().default(0),
+});
 
-  // Find record by ID
-  async findById(id) {
-    try {
-      const query = `SELECT * FROM ${this.tableName} WHERE id = $1`;
-      const result = await this.db.query(query, [id]);
-      return result.rows[0] || null;
-    } catch (error) {
-      throw new Error(`Error finding record by ID: ${error.message}`);
-    }
-  }
+// Bookings table
+const booking = table('booking', {
+    id: integer().primaryKey().generatedAlwaysAsIdentity(),
+    userId: integer()
+        .notNull()
+        .references(() => user.id, { onDelete: 'cascade' }),
+    eventId: integer()
+        .notNull()
+        .references(() => event.id, { onDelete: 'cascade' }),
 
-  // Create new record
-  async create(data) {
-    try {
-      const keys = Object.keys(data);
-      const values = Object.values(data);
-      const placeholders = keys.map((_, index) => `$${index + 1}`).join(', ');
+    cost: integer().notNull(),
+    createdAt: timestamp().defaultNow(),
+    updatedAt: timestamp().defaultNow(),
+});
 
-      const query = `
-        INSERT INTO ${this.tableName} (${keys.join(', ')})
-        VALUES (${placeholders})
-        RETURNING *
-      `;
+// User → Events
+// A host user can have many events (events.hostId links to users.id).
+// → for eventsHostedByUser, just query events where hostId = user.id.
 
-      const result = await this.db.query(query, values);
-      return result.rows[0];
-    } catch (error) {
-      throw new Error(`Error creating record: ${error.message}`);
-    }
-  }
+// User → Bookings → Events
+// A guest books an event via the bookings table.
+// → for events_booked_by_user, you join bookings on userId.
 
-  // Update record by ID
-  async updateById(id, data) {
-    try {
-      const keys = Object.keys(data);
-      const values = Object.values(data);
-      const setClause = keys
-        .map((key, index) => `${key} = $${index + 2}`)
-        .join(', ');
+// Event → Guests
+// Guests list = all users who booked that event (bookings where eventId = event.id).
 
-      const query = `
-        UPDATE ${this.tableName}
-        SET ${setClause}
-        WHERE id = $1
-        RETURNING *
-      `;
-
-      const result = await this.db.query(query, [id, ...values]);
-      return result.rows[0] || null;
-    } catch (error) {
-      throw new Error(`Error updating record: ${error.message}`);
-    }
-  }
-
-  // Delete record by ID
-  async deleteById(id) {
-    try {
-      const query = `DELETE FROM ${this.tableName} WHERE id = $1 RETURNING *`;
-      const result = await this.db.query(query, [id]);
-      return result.rows[0] || null;
-    } catch (error) {
-      throw new Error(`Error deleting record: ${error.message}`);
-    }
-  }
+// Hash password before saving to DB
+async function hashPassword(password) {
+    const saltRounds = 12;
+    return (await bcrypt.hash(password, saltRounds)).toString();
 }
 
-// Example User model
-class User extends BaseModel {
-  constructor() {
-    super('users');
-  }
-
-  // Custom method for finding user by email
-  async findByEmail(email) {
-    try {
-      const query = `SELECT * FROM ${this.tableName} WHERE email = $1`;
-      const result = await this.db.query(query, [email]);
-      return result.rows[0] || null;
-    } catch (error) {
-      throw new Error(`Error finding user by email: ${error.message}`);
-    }
-  }
+// Compare password with hashed one
+async function isPasswordCorrect(plainPassword, hashedPassword) {
+    return await bcrypt.compare(plainPassword, hashedPassword);
 }
 
-// Example Event model
-class Event extends BaseModel {
-  constructor() {
-    super('events');
-  }
-
-  // Custom method for finding active events
-  async findActiveEvents() {
-    try {
-      const query = `
-        SELECT * FROM ${this.tableName}
-        WHERE status = 'active' AND event_date > NOW()
-        ORDER BY event_date ASC
-      `;
-      const result = await this.db.query(query);
-      return result.rows;
-    } catch (error) {
-      throw new Error(`Error finding active events: ${error.message}`);
-    }
-  }
+// Generate Access Token
+function generateAccessToken(user) {
+    return jwt.sign(
+        {
+            id: user.id,
+            username: user.username,
+            email: user.email,
+        },
+        process.env.ACCESS_TOKEN_SECRET,
+        {
+            expiresIn: process.env.ACCESS_TOKEN_EXPIRY,
+        }
+    );
 }
 
-// Example Seat model
-class Seat extends BaseModel {
-  constructor() {
-    super('seats');
-  }
-
-  // Custom method for finding available seats for an event
-  async findAvailableSeats(eventId) {
-    try {
-      const query = `
-        SELECT * FROM ${this.tableName}
-        WHERE event_id = $1 AND status = 'available'
-        ORDER BY row_number, seat_number
-      `;
-      const result = await this.db.query(query, [eventId]);
-      return result.rows;
-    } catch (error) {
-      throw new Error(`Error finding available seats: ${error.message}`);
-    }
-  }
+// Generate Refresh Token
+function generateRefreshToken(userId) {
+    return jwt.sign({ id: userId }, process.env.REFRESH_TOKEN_SECRET, {
+        expiresIn: process.env.REFRESH_TOKEN_EXPIRY,
+    });
 }
 
-module.exports = {
-  BaseModel,
-  User,
-  Event,
-  Seat,
+export {
+    user,
+    event,
+    booking,
+    hashPassword,
+    isPasswordCorrect,
+    generateAccessToken,
+    generateRefreshToken,
+    rolesEnum,
 };

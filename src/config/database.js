@@ -1,36 +1,20 @@
-const { Pool } = require('pg');
+import { drizzle } from 'drizzle-orm/node-postgres';
+import pkg from 'pg';
+import dotenv from "dotenv";
+dotenv.config();
 
-// Database configuration
-const dbConfig = {
-  host: process.env.DB_HOST || 'localhost',
-  port: process.env.DB_PORT || 5432,
-  database: process.env.DB_NAME || 'atomicseats',
-  user: process.env.DB_USER || 'postgres',
-  password: process.env.DB_PASSWORD || 'password',
-  max: parseInt(process.env.DB_POOL_SIZE) || 20,
-  idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 2000,
-};
+const { Pool } = pkg;
 
-// Create PostgreSQL connection pool
-const pool = new Pool(dbConfig);
+const pool = new Pool({
+  host: process.env.DB_HOST,
+  port: Number(process.env.DB_PORT),
+  user: process.env.DB_USER,
+  password: process.env.DB_PASSWORD,
+  database: process.env.DB_NAME,
+});
 
-// Test database connection
-const testConnection = async () => {
-  try {
-    const client = await pool.connect();
-    console.log('✅ Connected to PostgreSQL database');
-    client.release();
-  } catch (error) {
-    console.error('❌ Database connection failed:', error.message);
-  }
-};
+const db = drizzle(pool);
 
-// Initialize database connection test
-testConnection();
+console.log('Database connected...');
 
-// Export pool for use in models
-module.exports = {
-  pool,
-  testConnection,
-};
+export { db };

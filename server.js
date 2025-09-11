@@ -1,6 +1,7 @@
-const app = require('./src/app');
-const config = require('./src/config/database');
+import app from './src/app.js';
+import dotenv from 'dotenv';
 
+dotenv.config({ path: './env' });
 const PORT = process.env.PORT || 3000;
 
 // Start server
