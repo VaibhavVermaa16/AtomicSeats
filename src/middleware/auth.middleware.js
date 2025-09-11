@@ -11,7 +11,8 @@ const verifyToken = asyncHandler(async (req, res, next) => {
             req.cookies?.accessToken ||
             req.header('Authorization')?.replace('Bearer ', '');
 
-        if (!token) throw res.status(401).json(new  apiError(401, 'Unauthorized access'));
+        if (!token)
+            throw new apiError(401, 'Unauthorized access');
         const decodedToken = jwt.decode(token, process.env.ACCESS_TOKEN_SECRET);
 
         const user = await db
@@ -30,14 +31,14 @@ const verifyToken = asyncHandler(async (req, res, next) => {
             error.name === 'JsonWebTokenError' ||
             error.name === 'TokenExpiredError'
         ) {
-            throw res.status(401).json(new  apiError(
+            throw new apiError(
                 401,
                 'Unauthorized access: Invalid or expired token'
-            ));
+            );
         }
         // Handle other errors
         console.log(error);
-        throw res.status(401).json(new  apiError(500, 'Internal server error'));
+        throw new apiError(500, 'Internal server error');
     }
 });
 

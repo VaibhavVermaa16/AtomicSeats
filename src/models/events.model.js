@@ -1,3 +1,4 @@
+import { user as User } from './user.model.js';
 import {
     pgTable as table,
     varchar,
@@ -12,7 +13,7 @@ const event = table('events', {
     description: varchar({ length: 1024 }).notNull(),
     hostId: integer()
         .notNull()
-        .references(() => user.id, { onDelete: 'cascade' }), // who is hosting
+        .references(() => User.id, { onDelete: 'cascade' }), // who is hosting
 
     venue: varchar({ length: 512 }).notNull(),
     startsAt: timestamp().notNull(),

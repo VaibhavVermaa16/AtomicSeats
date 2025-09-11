@@ -3,10 +3,12 @@ import {
     pgTable as table,
     varchar,
     integer,
-    timestamp,
 } from 'drizzle-orm/pg-core';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
+import dotenv from 'dotenv';
+
+dotenv.config();
 
 // Enums
 const rolesEnum = pgEnum('roles', ['guest', 'host', 'admin']);

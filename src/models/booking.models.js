@@ -1,3 +1,5 @@
+import { user as User } from './user.model.js';
+import { event as Event } from './events.model.js';
 import {
     pgTable as table,
     integer,
@@ -9,11 +11,11 @@ const booking = table('booking', {
     id: integer().primaryKey().generatedAlwaysAsIdentity(),
     userId: integer()
         .notNull()
-        .references(() => user.id, { onDelete: 'cascade' }),
+        .references(() => User.id, { onDelete: 'cascade' }),
     eventId: integer()
         .notNull()
-        .references(() => event.id, { onDelete: 'cascade' }),
-
+        .references(() => Event.id, { onDelete: 'cascade' }),
+    numberOfSeats: integer().notNull(),
     cost: integer().notNull(),
     createdAt: timestamp().defaultNow(),
     updatedAt: timestamp().defaultNow(),

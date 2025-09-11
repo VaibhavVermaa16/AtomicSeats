@@ -3,13 +3,14 @@ import ApiResponse from '../utils/apiResponse.js';
 import asyncHandler from '../utils/asyncHandler.js';
 import { db } from '../config/database.js';
 import { eq } from 'drizzle-orm';
-import { event, event as Event } from '../models/events.model.js';
+import { event as Event } from '../models/events.model.js';
+import { booking } from '../models/booking.models.js';
 
 const getAllEvents = asyncHandler(async (req, res) => {
     const events = await db.select().from(Event);
     console.log(events);
     if (events.length === 0) {
-        throw res.status(404).json(new ApiError(404, 'No events found'));
+        throw new ApiError(404, 'No events found');
     }
 
     return res.status(200).json(new ApiResponse(200, 'Events found', events));
@@ -72,7 +73,7 @@ const createEvent = asyncHandler(async (req, res) => {
         .returning({ event_id: Event.id, event_name: Event.name });
 
     if (newEvent.length == 0) {
-        return res.status(401).json(new ApiError(401, 'Event Creation failed'));
+        return new ApiError(401, 'Event Creation failed');
     }
 
     return res
@@ -85,19 +86,17 @@ const updateEvent = asyncHandler(async (req, res) => {
     const { id, name, description, startAt, endAt, venue, capacity } = req.body;
 
     if (!id) {
-        return res.status(400).json(new ApiError(400, 'Event ID is required.'));
+        return new ApiError(400, 'Event ID is required.');
     }
 
     const event = await db.select().from(Event).where(eq(Event.id, id));
 
     if (!event.length) {
-        return res.status(404).json(new ApiError(404, 'Event not found.'));
+        return new ApiError(404, 'Event not found.');
     }
 
     if (event[0].hostId !== user.id) {
-        return res
-            .status(401)
-            .json(new ApiError(401, 'Unauthorized to modify this event.'));
+        return new ApiError(401, 'Unauthorized to modify this event.');
     }
 
     // Build update object dynamically
@@ -110,9 +109,7 @@ const updateEvent = asyncHandler(async (req, res) => {
     if (capacity !== undefined) updateData.capacity = capacity;
 
     if (Object.keys(updateData).length === 0) {
-        return res
-            .status(400)
-            .json(new ApiError(400, 'No fields provided to update.'));
+        return new ApiError(400, 'No fields provided to update.');
     }
 
     await db.update(Event).set(updateData).where(eq(Event.id, id));
@@ -130,21 +127,20 @@ const deleteEvent = asyncHandler(async (req, res) => {
     const hostId = event[0].hostId;
 
     if (hostId != req.user.id) {
-        throw res
-            .status(400)
-            .json(new ApiError(400, 'User not allowed to delete this event.'));
+        throw new ApiError(400, 'User not allowed to delete this event.');
     }
 
-    const deleted_event = await db.delete(Event).where(eq(Event.id, id)).returning({
-        event_name: Event.name,
-        event_id: Event.id,
-        event_description: Event.description,
-    });
+    const deleted_event = await db
+        .delete(Event)
+        .where(eq(Event.id, id))
+        .returning({
+            event_name: Event.name,
+            event_id: Event.id,
+            event_description: Event.description,
+        });
 
     if (deleted_event[0].length === 0)
-        throw res
-            .status(401)
-            .json(new ApiError(401, `Error, deleting event: ${id}`));
+        throw new ApiError(401, `Error, deleting event: ${id}`);
 
     return res
         .status(201)
@@ -153,4 +149,60 @@ const deleteEvent = asyncHandler(async (req, res) => {
         );
 });
 
-export { getAllEvents, createEvent, updateEvent, deleteEvent };
+const bookEvent = asyncHandler(async (req, res) => {
+    if (!req.user) {
+        return;
+        new ApiError(401, 'Unauthorized, please login to book an event');
+    }
+    const { eventId, numberOfSeats } = req.body;
+    const userId = req.user.id;
+
+    if (!eventId || !numberOfSeats) {
+        return new ApiError(400, 'Event ID and number of seats are required.');
+    }
+
+    const result = await db.transaction(async (tx) => {
+        const currentEvent = await tx
+            .select()
+            .from(Event)
+            .where(eq(Event.id, eventId))
+            .for('update');
+
+        if (currentEvent.length === 0) {
+            throw new ApiError(404, 'Event not found.');
+        }
+
+        const availableSeats =
+            currentEvent[0].capacity - currentEvent[0].reservedSeats;
+
+        if (availableSeats < numberOfSeats) {
+            throw new ApiError(400, 'Not enough seats available.');
+        }
+
+        const updatedEvent = await tx
+            .update(Event)
+            .set({
+                reservedSeats: currentEvent[0].reservedSeats + numberOfSeats,
+            })
+            .where(eq(Event.id, eventId))
+            .returning();
+
+        const newBooking = await tx
+            .insert(booking)
+            .values({
+                userId,
+                eventId,
+                numberOfSeats,
+                cost: 0, // Assuming cost is 0 for now
+            })
+            .returning();
+
+        return { updatedEvent: updatedEvent[0], newBooking: newBooking[0] };
+    });
+
+    return res
+        .status(200)
+        .json(new ApiResponse(200, 'Event booked successfully', result));
+});
+
+export { getAllEvents, createEvent, updateEvent, deleteEvent, bookEvent };
