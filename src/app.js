@@ -7,7 +7,6 @@ import cookieParser from 'cookie-parser';
 
 import userRoutes from './routes/user.routes.js';
 import eventsRoutes from './routes/events.routes.js';
-import middleware from './middleware/index.js';
 
 dotenv.config();
 
@@ -27,9 +26,6 @@ app.use(
         cookie: { maxAge: 30 * 60 * 1000 }, // Session lasts 30 mins
     })
 );
-
-// Custom middleware
-app.use(middleware.requestLogger);
 
 // Health check endpoint
 app.get('/health', (req, res) => {

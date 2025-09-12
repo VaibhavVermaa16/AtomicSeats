@@ -8,44 +8,44 @@ import { booking } from '../models/booking.models.js';
 import { client } from '../config/redis.js';
 
 const getAllEvents = asyncHandler(async (req, res) => {
-    // Get all events from Postgres
-    // const events = await db.select().from(Event);
-    // console.log(events);
-    // if (events.length === 0) {
-    //     throw new ApiError(404, 'No events found');
-    // }
-
-    // return res.status(200).json(new ApiResponse(200, 'Events found', events));
-
-    // Get all events from Redis
-    const keys = await client.keys('event_*');
-
-    if (keys.length === 0) {
-        throw new ApiError(404, 'No events found in cache');
+    // Try to get all events from Redis
+    try {
+        const keys = await client.keys('event*');
+        if (keys.length > 0) {
+            const events = [];
+            for (const key of keys) {
+                const event = await client.hGetAll(key);
+                events.push({
+                    id: Number(event.event_id),
+                    name: event.event_name,
+                    description: event.description,
+                    hostId: Number(event.host_id),
+                    venue: event.venue,
+                    startsAt: new Date(event.starts_at),
+                    endsAt: new Date(event.ends_at),
+                    capacity: Number(event.capacity),
+                    reservedSeats: Number(event.reserved_seats),
+                });
+            }
+            return res
+                .status(200)
+                .json(
+                    new ApiResponse(200, 'Events found (from Redis)', events)
+                );
+        }
+        // If no keys found, fall through to DB fetch
+    } catch (error) {
+        // If any error, fall through to DB fetch
     }
 
-    // 2. Fetch each hash
-    const events = [];
-    for (const key of keys) {
-        const event = await client.hGetAll(key);
-
-        // 3. Convert types back
-        events.push({
-            id: Number(event.event_id),
-            name: event.event_name,
-            description: event.description,
-            hostId: Number(event.host_id),
-            venue: event.venue,
-            startsAt: new Date(event.starts_at),
-            endsAt: new Date(event.ends_at),
-            capacity: Number(event.capacity),
-            reservedSeats: Number(event.reserved_seats),
-        });
+    // Fallback: Get all events from Postgres
+    const events = await db.select().from(Event);
+    if (events.length === 0) {
+        throw new ApiError(404, 'No events found');
     }
-
     return res
         .status(200)
-        .json(new ApiResponse(200, 'Events found (from Redis)', events));
+        .json(new ApiResponse(200, 'Events found (from DB)', events));
 });
 
 const createEvent = asyncHandler(async (req, res) => {
@@ -170,6 +170,23 @@ const updateEvent = asyncHandler(async (req, res) => {
     }
 
     await db.update(Event).set(updateData).where(eq(Event.id, id));
+
+    await client.hSet(`event_${id}`, {
+        ...(updateData.name && { event_name: updateData.name }),
+        ...(updateData.description && {
+            description: updateData.description,
+        }),
+        ...(updateData.startsAt && {
+            starts_at: updateData.startsAt.toISOString(),
+        }),
+        ...(updateData.endsAt && {
+            ends_at: updateData.endsAt.toISOString(),
+        }),
+        ...(updateData.venue && { venue: updateData.venue }),
+        ...(updateData.capacity && {
+            capacity: updateData.capacity.toString(),
+        }),
+    });
 
     return res
         .status(200)

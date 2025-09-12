@@ -12,7 +12,7 @@ import RateLimiter from '../middleware/ratelimiter.middleware.js';
 const router = express.Router();
 
 // Event routes go here
-router.route('/all').get(verifyToken, RateLimiter(5, 60), getAllEvents);
+router.route('/all').get(verifyToken, RateLimiter(50, 60), getAllEvents);
 
 router.route('/create').post(verifyToken, RateLimiter(5, 60), createEvent);
 
