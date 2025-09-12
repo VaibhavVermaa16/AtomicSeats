@@ -2,7 +2,7 @@ import asyncHandler from '../utils/asyncHandler.js';
 import jwt from 'jsonwebtoken';
 import { user as User } from '../models/user.model.js';
 import { db } from '../config/database.js';
-import apiError from '../utils/ApiError.js';
+import apiError from '../utils/apiError.js';
 import { eq } from 'drizzle-orm';
 import { client } from '../config/redis.js';
 

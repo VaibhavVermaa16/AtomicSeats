@@ -1,5 +1,5 @@
 import { client } from '../config/redis.js';
-import ApiError from '../utils/ApiError.js';
+import ApiError from '../utils/apiError.js';
 import asyncHandler from '../utils/asyncHandler.js';
 
 const RateLimiter = (limit, windowInSeconds) => {

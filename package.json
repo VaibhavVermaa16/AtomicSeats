@@ -3,6 +3,7 @@
     "version": "1.0.0",
     "description": "A fault-tolerant, high-concurrency ticket booking system built with Node.Js, Redis, Kafka, and PostgreSQL. Ensures atomic seat reservations, prevents overselling with distributed locks, supports event-driven workflows, and keeps Redis + DB in sync through idempotent operations and reconciliation.",
     "main": "server.js",
+    "type": "module",
     "scripts": {
         "start": "node server.js",
         "dev": "nodemon server.js",
