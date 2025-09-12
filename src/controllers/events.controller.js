@@ -265,14 +265,6 @@ const bookEvent = asyncHandler(async (req, res) => {
         .json(new ApiResponse(200, 'Event booked successfully', result));
 });
 
-const getRedis = asyncHandler(async (req, res) => {
-    await client.set('foo', 'bar');
-    const value = await client.get('foo');
-    console.log(value);
-    return res
-        .status(200)
-        .json(new ApiResponse(200, 'Redis value fetched', { value }));
-});
 
 export {
     getAllEvents,
@@ -280,5 +272,4 @@ export {
     updateEvent,
     deleteEvent,
     bookEvent,
-    getRedis,
 };

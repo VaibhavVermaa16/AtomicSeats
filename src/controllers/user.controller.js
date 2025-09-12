@@ -10,6 +10,7 @@ import ApiResponse from '../utils/apiResponse.js';
 import asyncHandler from '../utils/asyncHandler.js';
 import { db } from '../config/database.js';
 import { eq } from 'drizzle-orm';
+import { client } from '../config/redis.js';
 
 const generateAccessAndRefreshToken = async (userId) => {
     try {
@@ -127,11 +128,14 @@ const loginUser = asyncHandler(async (req, res) => {
     // console.log(accessToken, refreshToken);
 
     existed_user[0].refreshToken = refreshToken;
+
+    // Update user in database
     await db
         .update(User)
         .set({ refreshToken: refreshToken })
         .where(eq(User.id, existed_user[0].id));
 
+    // Fetch only necessary user details to return
     const newUser = await db
         .select({
             username: User.username,
@@ -146,6 +150,14 @@ const loginUser = asyncHandler(async (req, res) => {
         httpOnly: true,
         secure: true,
     };
+
+    // Cache user in Redis for quick lookup
+    await client.set(
+        `user:${existed_user[0].id}`,
+        JSON.stringify(existed_user[0]),
+        'EX',
+        60 * 60 // 1 hour cache
+    );
 
     return res
         .status(200)

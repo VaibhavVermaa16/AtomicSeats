@@ -4,6 +4,7 @@ import { user as User } from '../models/user.model.js';
 import { db } from '../config/database.js';
 import apiError from '../utils/ApiError.js';
 import { eq } from 'drizzle-orm';
+import { client } from '../config/redis.js';
 
 const verifyToken = asyncHandler(async (req, res, next) => {
     try {
@@ -11,21 +12,33 @@ const verifyToken = asyncHandler(async (req, res, next) => {
             req.cookies?.accessToken ||
             req.header('Authorization')?.replace('Bearer ', '');
 
-        if (!token)
-            throw new apiError(401, 'Unauthorized access');
+        if (!token) throw new apiError(401, 'Unauthorized access');
+
         const decodedToken = jwt.decode(token, process.env.ACCESS_TOKEN_SECRET);
 
-        // ceck for redis block 
-        
-        const user = await db
-            .select()
-            .from(User)
-            .where(eq(User.id, decodedToken?.id));
+        // Get cached user from Redis
+        const cachedUser = await client.get(`user:${decodedToken.id}`);
 
-        if (user[0].length === 0)
-            return new apiError(401, 'Unauthorized access');
+        if (cachedUser) {
+            req.user = JSON.parse(cachedUser);
+        } else {
+            const user = await db
+                .select()
+                .from(User)
+                .where(eq(User.id, decodedToken?.id));
 
-        req.user = user[0];
+            if (user[0].length === 0)
+                return new apiError(401, 'Unauthorized access');
+
+            req.user = user[0];
+            // Cache user in Redis for quick lookup
+            await client.set(
+                `user:${user[0].id}`,
+                JSON.stringify(user[0]),
+                'EX',
+                3600
+            );
+        }
         next();
     } catch (error) {
         // Handle token verification errors

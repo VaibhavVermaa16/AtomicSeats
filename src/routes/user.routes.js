@@ -1,6 +1,7 @@
 import express from 'express';
 import { registerUser, loginUser, logOutUser } from '../controllers/user.controller.js'
 import { verifyToken } from '../middleware/auth.middleware.js';
+import RateLimiter from '../middleware/ratelimiter.middleware.js';
 
 const router = express.Router();
 
@@ -20,9 +21,9 @@ router.get('/', (req, res) => {
 
 router
     .route('/register')
-    .post(registerUser);
+    .post(RateLimiter(5, 60), registerUser);
 
-router.route('/login').post(loginUser);
+router.route('/login').post(RateLimiter(5, 60), loginUser);
 
 router.route('/logout').post(verifyToken, logOutUser);
 
