@@ -95,8 +95,11 @@ src/
 ## 🗄️ Database Setup
 
 ### Generate migrations
+
 - npx drizzle-kit generate
+
 ### Apply the migrations
+
 - npx drizzle-kit migrate
 
 Create a PostgreSQL database and update the `.env` file with your database credentials.

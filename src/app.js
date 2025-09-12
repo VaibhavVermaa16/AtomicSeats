@@ -5,7 +5,7 @@ import dotenv from 'dotenv';
 import session from 'express-session';
 import cookieParser from 'cookie-parser';
 
-import userRoutes  from './routes/user.routes.js';
+import userRoutes from './routes/user.routes.js';
 import eventsRoutes from './routes/events.routes.js';
 import middleware from './middleware/index.js';
 
@@ -52,6 +52,5 @@ app.use((req, res) => {
         path: req.originalUrl,
     });
 });
-
 
 export default app;

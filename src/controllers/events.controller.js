@@ -265,11 +265,4 @@ const bookEvent = asyncHandler(async (req, res) => {
         .json(new ApiResponse(200, 'Event booked successfully', result));
 });
 
-
-export {
-    getAllEvents,
-    createEvent,
-    updateEvent,
-    deleteEvent,
-    bookEvent,
-};
+export { getAllEvents, createEvent, updateEvent, deleteEvent, bookEvent };

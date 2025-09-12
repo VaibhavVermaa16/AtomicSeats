@@ -1,10 +1,6 @@
 import { user as User } from './user.model.js';
 import { event as Event } from './events.model.js';
-import {
-    pgTable as table,
-    integer,
-    timestamp,
-} from 'drizzle-orm/pg-core';
+import { pgTable as table, integer, timestamp } from 'drizzle-orm/pg-core';
 
 // Bookings table
 const booking = table('booking', {

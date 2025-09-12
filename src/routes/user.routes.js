@@ -1,5 +1,9 @@
 import express from 'express';
-import { registerUser, loginUser, logOutUser } from '../controllers/user.controller.js'
+import {
+    registerUser,
+    loginUser,
+    logOutUser,
+} from '../controllers/user.controller.js';
 import { verifyToken } from '../middleware/auth.middleware.js';
 import RateLimiter from '../middleware/ratelimiter.middleware.js';
 
@@ -19,9 +23,7 @@ router.get('/', (req, res) => {
     });
 });
 
-router
-    .route('/register')
-    .post(RateLimiter(5, 60), registerUser);
+router.route('/register').post(RateLimiter(5, 60), registerUser);
 
 router.route('/login').post(RateLimiter(5, 60), loginUser);
 
