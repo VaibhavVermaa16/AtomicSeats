@@ -5,15 +5,47 @@ import { db } from '../config/database.js';
 import { eq } from 'drizzle-orm';
 import { event as Event } from '../models/events.model.js';
 import { booking } from '../models/booking.models.js';
+import { client } from '../config/redis.js';
 
 const getAllEvents = asyncHandler(async (req, res) => {
-    const events = await db.select().from(Event);
-    console.log(events);
-    if (events.length === 0) {
-        throw new ApiError(404, 'No events found');
+    // Get all events from Postgres
+    // const events = await db.select().from(Event);
+    // console.log(events);
+    // if (events.length === 0) {
+    //     throw new ApiError(404, 'No events found');
+    // }
+
+    // return res.status(200).json(new ApiResponse(200, 'Events found', events));
+
+    // Get all events from Redis
+    const keys = await client.keys('event_*');
+
+    if (keys.length === 0) {
+        throw new ApiError(404, 'No events found in cache');
     }
 
-    return res.status(200).json(new ApiResponse(200, 'Events found', events));
+    // 2. Fetch each hash
+    const events = [];
+    for (const key of keys) {
+        const event = await client.hGetAll(key);
+
+        // 3. Convert types back
+        events.push({
+            id: Number(event.event_id),
+            name: event.event_name,
+            description: event.description,
+            hostId: Number(event.host_id),
+            venue: event.venue,
+            startsAt: new Date(event.starts_at),
+            endsAt: new Date(event.ends_at),
+            capacity: Number(event.capacity),
+            reservedSeats: Number(event.reserved_seats),
+        });
+    }
+
+    return res
+        .status(200)
+        .json(new ApiResponse(200, 'Events found (from Redis)', events));
 });
 
 const createEvent = asyncHandler(async (req, res) => {
@@ -70,10 +102,35 @@ const createEvent = asyncHandler(async (req, res) => {
             capacity: numericCapacity,
             reservedSeats,
         })
-        .returning({ event_id: Event.id, event_name: Event.name });
+        .returning({
+            event_id: Event.id,
+            event_name: Event.name,
+            description: Event.description,
+            host_id: Event.hostId,
+            venue: Event.venue,
+            starts_at: Event.startsAt,
+            ends_at: Event.endsAt,
+            capacity: Event.capacity,
+            reserved_seats: Event.reservedSeats,
+        });
+
+    const event = newEvent[0];
+
+    // Save as Redis hash
+    await client.hSet(`event_${event.event_id}`, {
+        event_id: event.event_id.toString(),
+        event_name: event.event_name,
+        description: event.description,
+        host_id: event.host_id.toString(),
+        venue: event.venue,
+        starts_at: event.starts_at.toISOString(),
+        ends_at: event.ends_at.toISOString(),
+        capacity: event.capacity.toString(),
+        reserved_seats: event.reserved_seats.toString(),
+    });
 
     if (newEvent.length == 0) {
-        return new ApiError(401, 'Event Creation failed');
+        throw new ApiError(401, 'Event Creation failed');
     }
 
     return res
@@ -151,14 +208,17 @@ const deleteEvent = asyncHandler(async (req, res) => {
 
 const bookEvent = asyncHandler(async (req, res) => {
     if (!req.user) {
-        return;
-        new ApiError(401, 'Unauthorized, please login to book an event');
+        throw new ApiError(401, 'Unauthorized, please login to book an event');
     }
     const { eventId, numberOfSeats } = req.body;
     const userId = req.user.id;
 
     if (!eventId || !numberOfSeats) {
-        return new ApiError(400, 'Event ID and number of seats are required.');
+        throw new ApiError(400, 'Event ID and number of seats are required.');
+    }
+
+    if (numberOfSeats <= 0 || numberOfSeats > 10) {
+        throw new ApiError(400, 'Maximum of 10 seats can be booked at once.');
     }
 
     const result = await db.transaction(async (tx) => {
@@ -205,4 +265,20 @@ const bookEvent = asyncHandler(async (req, res) => {
         .json(new ApiResponse(200, 'Event booked successfully', result));
 });
 
-export { getAllEvents, createEvent, updateEvent, deleteEvent, bookEvent };
+const getRedis = asyncHandler(async (req, res) => {
+    await client.set('foo', 'bar');
+    const value = await client.get('foo');
+    console.log(value);
+    return res
+        .status(200)
+        .json(new ApiResponse(200, 'Redis value fetched', { value }));
+});
+
+export {
+    getAllEvents,
+    createEvent,
+    updateEvent,
+    deleteEvent,
+    bookEvent,
+    getRedis,
+};

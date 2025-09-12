@@ -15,6 +15,8 @@ const verifyToken = asyncHandler(async (req, res, next) => {
             throw new apiError(401, 'Unauthorized access');
         const decodedToken = jwt.decode(token, process.env.ACCESS_TOKEN_SECRET);
 
+        // ceck for redis block 
+        
         const user = await db
             .select()
             .from(User)
