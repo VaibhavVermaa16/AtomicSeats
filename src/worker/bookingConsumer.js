@@ -1,5 +1,5 @@
 import { producer, bookingConsumer } from '../utils/kafka.js';
-import { db } from '../config/database.js';
+import { db, pgPool } from '../config/database.js';
 import { event as Event } from '../models/events.model.js';
 import { booking } from '../models/booking.models.js';
 import { eq } from 'drizzle-orm';
@@ -8,7 +8,14 @@ import { reconcileRedisWithPostgres } from '../utils/redisReconciler.js';
 
 const consumer = bookingConsumer;
 
-async function sendBookingNotification(userId, eventId, numberOfSeats, totalCost, email, success) {
+async function sendBookingNotification(
+    userId,
+    eventId,
+    numberOfSeats,
+    totalCost,
+    email,
+    success
+) {
     await producer.connect();
     await producer.send({
         topic: 'notify-user',
@@ -39,54 +46,76 @@ async function startBookingConsumer() {
 
     await consumer.run({
         eachMessage: async ({ message }) => {
-            const { userId, eventId, numberOfSeats, email } = JSON.parse(
-                message.value.toString()
-            );
+            const { messageId, userId, eventId, numberOfSeats, email } =
+                JSON.parse(message.value.toString());
 
             console.log(
                 `Processing booking for user ${userId} on event ${eventId} for ${numberOfSeats} seats`
             );
-            // Booking logic (check seats, update DB, etc.)
-            const currentEvent = await db
-                .select()
-                .from(Event)
-                .where(eq(Event.id, eventId));
-
-            const availableSeats =
-                currentEvent[0].capacity - currentEvent[0].reservedSeats;
-            if (availableSeats < numberOfSeats) {
-                console.error(
-                    `Not enough seats available for event ${eventId}`
-                );
-                await sendBookingNotification(
-                    userId,
-                    eventId,
-                    numberOfSeats,
-                    0,
-                    email,
-                    false
-                );
-                reconcileRedisWithPostgres();
-                return; // Skip this booking
+            // Idempotency: skip if messageId already processed
+            if (messageId) {
+                const idemKey = `booking_idem:${messageId}`;
+                const already = await client.set(idemKey, '1', {
+                    NX: true,
+                    EX: 60 * 60 * 6, // 6 hours
+                });
+                if (!already) {
+                    console.log(`Duplicate message ${messageId}, skipping.`);
+                    return;
+                }
             }
 
+            let totalCost = 0;
             try {
-                await db
-                    .update(Event)
-                    .set({
-                        reservedSeats:
-                            currentEvent[0].reservedSeats + numberOfSeats,
-                    })
-                    .where(eq(Event.id, eventId));
-                await db
-                    .insert(booking)
-                    .values({
-                        userId,
-                        eventId,
-                        cost: numberOfSeats * currentEvent[0].price,
-                        numberOfSeats,
-                    })
-                    .returning();
+                // Start a transaction using a client connection from pgPool
+                const clientConn = await pgPool.connect();
+                try {
+                    await clientConn.query('BEGIN');
+
+                    // Atomic capacity check and increment
+                    const updateRes = await clientConn.query(
+                        `UPDATE events
+                         SET "reservedSeats" = "reservedSeats" + $1
+                         WHERE id = $2 AND ("reservedSeats" + $1) <= capacity
+                         RETURNING "reservedSeats", price`,
+                        [numberOfSeats, eventId]
+                    );
+
+                    if (updateRes.rowCount === 0) {
+                        await clientConn.query('ROLLBACK');
+                        console.error(
+                            `Not enough capacity for event ${eventId}`
+                        );
+                        await sendBookingNotification(
+                            userId,
+                            eventId,
+                            numberOfSeats,
+                            0,
+                            email,
+                            false
+                        );
+                        reconcileRedisWithPostgres();
+                        return;
+                    }
+
+                    const price = Number(updateRes.rows[0].price || 0);
+                    totalCost = numberOfSeats * price;
+
+                    await clientConn.query(
+                        `INSERT INTO booking ("userId", "eventId", "numberOfSeats", cost)
+                         VALUES ($1, $2, $3, $4)`,
+                        [userId, eventId, numberOfSeats, totalCost]
+                    );
+
+                    await clientConn.query('COMMIT');
+                } catch (txErr) {
+                    try {
+                        await clientConn.query('ROLLBACK');
+                    } catch {}
+                    throw txErr;
+                } finally {
+                    clientConn.release();
+                }
             } catch (error) {
                 console.error('Error processing booking:', error);
                 await sendBookingNotification(
@@ -104,14 +133,21 @@ async function startBookingConsumer() {
                 await client.hSet(`booking_${userId}_${eventId}`, {
                     user_id: userId.toString(),
                     event_id: eventId.toString(),
-                    cost: (numberOfSeats * currentEvent[0].price).toString(),
+                    cost: totalCost.toString(),
                     number_of_seats: numberOfSeats.toString(),
                 });
 
                 // Update event cache in Redis
                 await client.hSet(`event_${eventId}`, {
+                    // reservedSeats unknown post-commit; it's fine to reconcile lazily
+                    // we can increment locally instead of reading
                     reserved_seats: (
-                        currentEvent[0].reservedSeats + numberOfSeats
+                        Number(
+                            (await client.hGet(
+                                `event_${eventId}`,
+                                'reserved_seats'
+                            )) || '0'
+                        ) + numberOfSeats
                     ).toString(),
                 });
             } catch (error) {
@@ -120,14 +156,14 @@ async function startBookingConsumer() {
             }
 
             console.log(
-                `Booking successful for user ${userId} on event ${eventId} for price ${numberOfSeats * currentEvent[0].price} for ${numberOfSeats} seats`
+                `Booking successful for user ${userId} on event ${eventId} for price ${totalCost} for ${numberOfSeats} seats`
             );
 
             await sendBookingNotification(
                 userId,
                 eventId,
                 numberOfSeats,
-                numberOfSeats * currentEvent[0].price,
+                totalCost,
                 email,
                 true
             );

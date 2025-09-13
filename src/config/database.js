@@ -22,4 +22,4 @@ const db = drizzle(pool);
 
 console.log('Database connected...');
 
-export { db };
+export { db, pool as pgPool };

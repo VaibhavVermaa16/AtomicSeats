@@ -1,163 +1,282 @@
+<div align="center">
+
 # AtomicSeats
 
-A fault-tolerant, high-concurrency ticket booking system built with Node.Js, Redis, Kafka, and PostgreSQL. Ensures atomic seat reservations, prevents overselling with distributed locks, supports event-driven workflows, and keeps Redis + DB in sync through idempotent operations and reconciliation.
+High-concurrency, event-driven ticket booking that stays consistent under load — built with Node.js, Express, PostgreSQL (Drizzle ORM), Redis, and Kafka.
 
-## 🚀 Quick Start
+</div>
 
-### Prerequisites
+## Why AtomicSeats?
 
-- Node.js (v14 or higher)
-- PostgreSQL database
-- npm or yarn
+- Atomic booking pipeline via Kafka workers — decouples API from booking execution
+- Redis-backed caching + custom rate limiter for resilience and fairness
+- Periodic reconciliation to keep Redis and Postgres in sync (idempotent rebuild)
+- Clean modular architecture with Drizzle models and migrations
 
-### Installation
+## ✨ Features
 
-```bash
-# Clone the repository
-git clone <repository-url>
-cd AtomicSeats
+- Event-driven bookings with Kafka (at-least-once processing)
+- Redis cache for events and bookings + hourly reconciliation job
+- JWT auth with httpOnly cookies or Bearer tokens
+- Per-user/IP rate limiting (Redis sorted sets)
+- Structured error and response wrappers
+- Dockerized app + workers + Kafka (external Postgres/Redis supported)
 
-# Install dependencies
-npm install
+## 🧭 Architecture (high level)
 
-# Copy environment variables
-cp .env.example .env
+```mermaid
+flowchart LR
+    Client((Client))
+    API[Express API\n/app.js]
+    K(Kafka Broker)
+    BW[Booking Worker\nbookingConsumer.js]
+    NW[Notification Worker\nnotificationConsumer.js]
+    PG[(PostgreSQL)]
+    R[(Redis)]
 
-# Update .env with your database credentials
+    Client <--> API
+    API -- book --> K
+    K --> BW
+    BW --> PG
+    BW --> R
+    BW -- notify --> K
+    K --> NW
+    NW -- email --> Client
+    API <-- cache --> R
+    Scheduler[[Cron: Reconcile]] --> R
+    Scheduler --> PG
 ```
 
-### Running the Application
-
-```bash
-# Development mode with auto-reload
-npm run dev
-
-# Production mode
-npm start
-```
-
-The server will start on `http://localhost:3000`
-
-## 📁 Project Structure
+## �️ Project Structure
 
 ```
 src/
-├── app.js              # Express application setup
+├── app.js                  # Express setup, middleware, routes, healthcheck
+├── scheduler.js            # Hourly Redis ↔ Postgres reconciliation
 ├── config/
-│   └── database.js     # PostgreSQL connection configuration
+│   ├── database.js         # Drizzle + node-postgres (DATABASE_URL)
+│   └── redis.js            # Redis client (host/port/password)
 ├── controllers/
-│   └── index.js        # API controllers with CRUD operations
+│   ├── events.controller.js    # Events CRUD + booking producer
+│   └── user.controller.js      # Auth: register/login/logout
+├── middleware/
+│   ├── auth.middleware.js      # JWT parser (cookie/Bearer)
+│   └── ratelimiter.middleware.js # Redis-backed rate limiter
 ├── models/
-│   └── index.js        # Database models and query methods
+│   ├── user.model.js           # Users table + auth helpers
+│   ├── events.model.js         # Events table
+│   └── booking.models.js       # Bookings table
 ├── routes/
-│   └── index.js        # API route definitions
-└── middleware/
-    └── index.js        # Custom middleware functions
+│   ├── user.routes.js          # /api/user endpoints
+│   └── events.routes.js        # /api/events endpoints
+├── utils/
+│   ├── kafka.js                # Kafka producer/consumers
+│   ├── redisReconciler.js      # Rebuild Redis from Postgres
+│   └── sendNotification.js     # Nodemailer transport
+└── worker/
+        ├── bookingConsumer.js      # Consumes bookings, updates DB+Redis, notifies
+        └── notificationConsumer.js # Sends email notifications
 ```
 
-## 🛠️ API Endpoints
+## 🧰 Tech Stack
 
-### Health Check
+- Node.js, Express 5
+- PostgreSQL + Drizzle ORM (drizzle-kit migrations)
+- Redis 5 (cache, rate limiting)
+- Kafka (kafkajs)
+- Nodemailer (Gmail)
+- Docker + docker-compose
 
-- `GET /health` - Server health status
+## ⚙️ Environment Variables
 
-### API Info
+Create an env file with these keys. Note: `server.js` loads from a file named `env` by default. You can either create a file named `env` at repo root or export variables in your shell. If you prefer `.env`, either change the path in `server.js` or symlink it: `ln -s .env env`.
 
-- `GET /api` - API information and available endpoints
+Required
 
-### Users
+- DATABASE_URL=postgresql://USER:PASS@HOST:5432/DBNAME
+- ACCESS_TOKEN_SECRET=your-long-random-secret
+- REFRESH_TOKEN_SECRET=your-long-random-secret
+- ACCESS_TOKEN_EXPIRY=15m
+- REFRESH_TOKEN_EXPIRY=7d
+- SESSION_SECRET=another-secret
+- KAFKA_BROKER=localhost:29092          # local outside Docker; kafka:9092 inside compose
 
-- `GET /api/users` - Get all users
-- `GET /api/users/:id` - Get user by ID
-- `GET /api/users/email/:email` - Get user by email
-- `POST /api/users` - Create new user
-- `PUT /api/users/:id` - Update user
-- `DELETE /api/users/:id` - Delete user
+Redis
 
-### Events
+- REDIS_HOST=localhost                  # or host.docker.internal from containers
+- REDIS_PORT=6379
+- REDIS_PASSWORD=                       # optional
 
-- `GET /api/events` - Get all events
-- `GET /api/events/active` - Get active events
-- `GET /api/events/:id` - Get event by ID
-- `POST /api/events` - Create new event
-- `PUT /api/events/:id` - Update event
-- `DELETE /api/events/:id` - Delete event
+Mail (Gmail)
 
-### Seats
+- MAIL_USER=you@gmail.com
+- MAIL_PASS=app-password                # Use Gmail App Passwords
 
-- `GET /api/seats` - Get all seats
-- `GET /api/seats/:id` - Get seat by ID
-- `GET /api/seats/event/:eventId/available` - Get available seats for event
-- `POST /api/seats` - Create new seat
-- `PUT /api/seats/:id` - Update seat
-- `DELETE /api/seats/:id` - Delete seat
+General
 
-## 🗄️ Database Setup
+- PORT=3000
+- NODE_ENV=development
 
-### Generate migrations
+## 🚀 Quick Start (Local)
 
-- npx drizzle-kit generate
-
-### Apply the migrations
-
-- npx drizzle-kit migrate
-
-Create a PostgreSQL database and update the `.env` file with your database credentials.
-
-Example table schemas (create these in your database):
-
-```sql
--- Users table
-CREATE TABLE users (
-    id SERIAL PRIMARY KEY,
-    email VARCHAR(255) UNIQUE NOT NULL,
-    name VARCHAR(255) NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
--- Events table
-CREATE TABLE events (
-    id SERIAL PRIMARY KEY,
-    name VARCHAR(255) NOT NULL,
-    event_date TIMESTAMP NOT NULL,
-    status VARCHAR(50) DEFAULT 'active',
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
--- Seats table
-CREATE TABLE seats (
-    id SERIAL PRIMARY KEY,
-    event_id INTEGER REFERENCES events(id),
-    row_number INTEGER NOT NULL,
-    seat_number INTEGER NOT NULL,
-    status VARCHAR(50) DEFAULT 'available',
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-```
-
-## 💻 Development
-
-### Code Formatting
+1) Install dependencies
 
 ```bash
-# Format code with Prettier
-npm run format
-
-# Check formatting
-npm run format:check
+npm install
 ```
 
-### Scripts
+2) Start Kafka (and Zookeeper) via Docker
 
-- `npm start` - Start production server
-- `npm run dev` - Start development server with auto-reload
-- `npm run format` - Format code with Prettier
-- `npm run format:check` - Check code formatting
+```bash
+docker compose up -d zookeeper kafka
+```
 
-## 🏗️ Architecture
+3) Ensure Postgres and Redis are running
 
-- **Modular Design**: Clear separation of concerns with dedicated folders for routes, controllers, models, and middleware
-- **PostgreSQL Integration**: Robust database operations with connection pooling
-- **Error Handling**: Comprehensive error handling with custom middleware
-- **Code Quality**: Prettier configuration for consistent code formatting
-- **Environment Configuration**: Flexible environment-based configuration
+- Postgres: provide a reachable `DATABASE_URL` (local or hosted)
+- Redis: run locally or in Docker:
+
+```bash
+docker run -d --name redis -p 6379:6379 redis:7.2
+```
+
+4) Generate and run migrations (Drizzle)
+
+```bash
+npm run db:generate
+npm run db:migrate
+```
+
+5) Start services
+
+Development API
+
+```bash
+npm run dev
+```
+
+Background workers (optional if not using docker-compose for them):
+
+```bash
+node src/worker/bookingConsumer.js
+node src/worker/notificationConsumer.js
+```
+
+API will be available at http://localhost:${PORT:-3000}
+
+## 🐳 Run Everything with Docker
+
+This repo provides containers for API + workers + Kafka/Zookeeper. You still supply your own Postgres/Redis (via env). Example using macOS host services:
+
+```bash
+# Ensure your env has DATABASE_URL, REDIS_HOST=host.docker.internal, REDIS_PORT=6379, KAFKA_BROKER=kafka:9092, MAIL_USER, MAIL_PASS
+docker compose up -d --build
+```
+
+Note: If you want Redis in compose too, you can add a service:
+
+```yaml
+redis:
+    image: redis:7.2
+    ports:
+        - "6379:6379"
+```
+
+Then set `REDIS_HOST=redis` for containers.
+
+## 🗄️ Database & Migrations (Drizzle)
+
+- Config: `drizzle.config.js` (uses `DATABASE_URL`)
+- Migrations out dir: `./drizzle`
+- Scripts
+    - Generate: `npm run db:generate`
+    - Migrate: `npm run db:migrate`
+
+Tables (Drizzle models)
+
+- users: id, username, name, email, password, role (guest|host|admin), refreshToken
+- events: id, name, description, hostId, venue, startsAt, endsAt, capacity, reservedSeats, price
+- booking: id, userId, eventId, numberOfSeats, cost, createdAt, updatedAt
+
+## 🔐 Auth & Rate Limiting
+
+- Login returns `{ accessToken, refreshToken }` and also sets httpOnly, secure cookies. For local HTTP testing, you may prefer passing `Authorization: Bearer <accessToken>`.
+- Protected endpoints use `Authorization: Bearer ...` or `accessToken` cookie.
+- Rate limits (examples):
+    - Register/Login: 5 requests/60s
+
+
+## 📡 API Reference (v1)
+
+Health
+
+- GET /health → { status, message, timestamp }
+
+User (prefix: /api/user)
+
+- GET /api/user/ → API info
+- POST /api/user/register { username, name, email, password, role } → 201
+- POST /api/user/login { email, password } → 200 { user, accessToken, refreshToken }
+- POST /api/user/logout (requires auth)
+
+Events (prefix: /api/events, requires auth)
+
+- GET /api/events/all → 200 [events]
+- POST /api/events/create { name, description, startsAt, endsAt, venue, capacity, price }
+- POST /api/events/update { id, ...fields }
+- POST /api/events/delete { id }
+- POST /api/events/book { eventId, numberOfSeats } → 200 (enqueued)
+
+Example: create event
+
+```bash
+curl -X POST http://localhost:3000/api/events/create \
+    -H "Authorization: Bearer $ACCESS_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d '{
+        "name":"Rock Night",
+        "description":"Live music",
+        "startsAt":"2025-12-20T19:00:00.000Z",
+        "endsAt":"2025-12-20T22:00:00.000Z",
+        "venue":"Arena",
+        "capacity": 500,
+        "price": 1200
+    }'
+```
+
+## 🎟️ Booking Flow
+
+1) API enqueues a message to Kafka topic `booking-requests`
+2) Booking worker consumes, verifies capacity, updates Postgres (events.reservedSeats and inserts booking)
+3) Worker updates Redis caches (event and booking keys)
+4) Worker emits `notify-user` message → Notification worker emails the user
+5) A scheduled job reconciles Redis from Postgres hourly for consistency
+
+## 🧹 Reconciliation (Redis ↔ Postgres)
+
+- On server start and hourly via cron, Redis is flushed and repopulated from Postgres (`src/utils/redisReconciler.js`)
+- Events, users, and bookings are written as hashes compatible with consumers/controllers
+
+## 🧪 Scripts
+
+- Start (prod): `npm start`
+- Start (dev): `npm run dev`
+- Format: `npm run format`
+- Format check: `npm run format:check`
+
+## 🧯 Troubleshooting
+
+- Cookies not appearing locally? Cookies are set with `secure: true`. Use Bearer tokens or enable HTTPS locally.
+- Kafka connection: outside Docker use `KAFKA_BROKER=localhost:29092`; inside compose services use `kafka:9092`.
+- Redis connection from containers to host: use `REDIS_HOST=host.docker.internal` on macOS.
+- Postgres SSL: the pool uses SSL; ensure your `DATABASE_URL` supports it (for Neon/Render use `sslmode=require`).
+- Rate limit 429 errors: slow down or raise limits in route definitions.
+
+## 🤝 Contributing
+
+Issues and PRs welcome. Please include context, reproduction steps, and proposed changes.
+
+## 📜 License
+
+ISC
+

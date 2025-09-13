@@ -6,6 +6,7 @@ import { eq } from 'drizzle-orm';
 import { event as Event } from '../models/events.model.js';
 import { client } from '../config/redis.js';
 import { producer } from '../utils/kafka.js';
+import { randomUUID } from 'crypto';
 
 const getAllEvents = asyncHandler(async (req, res) => {
     // Try to get all events from Redis
@@ -25,7 +26,7 @@ const getAllEvents = asyncHandler(async (req, res) => {
                     endsAt: new Date(event.ends_at),
                     capacity: Number(event.capacity),
                     reservedSeats: Number(event.reserved_seats),
-                    price: Number(event.price || 0)
+                    price: Number(event.price || 0),
                 });
             }
             return res
@@ -61,9 +62,18 @@ const createEvent = asyncHandler(async (req, res) => {
             );
     }
 
-    const { name, description, startsAt, endsAt, venue, capacity, price } = req.body;
+    const { name, description, startsAt, endsAt, venue, capacity, price } =
+        req.body;
 
-    if (!name || !description || !startsAt || !endsAt || !venue || !capacity || !price) {
+    if (
+        !name ||
+        !description ||
+        !startsAt ||
+        !endsAt ||
+        !venue ||
+        !capacity ||
+        !price
+    ) {
         return res
             .status(401)
             .json(new ApiError(400, 'All fields are required'));
@@ -102,7 +112,7 @@ const createEvent = asyncHandler(async (req, res) => {
             endsAt: endsAtDate,
             capacity: numericCapacity,
             reservedSeats,
-            price: Number(price)
+            price: Number(price),
         })
         .returning({
             event_id: Event.id,
@@ -114,7 +124,7 @@ const createEvent = asyncHandler(async (req, res) => {
             ends_at: Event.endsAt,
             capacity: Event.capacity,
             reserved_seats: Event.reservedSeats,
-            price: Event.price
+            price: Event.price,
         });
 
     const event = newEvent[0];
@@ -144,7 +154,17 @@ const createEvent = asyncHandler(async (req, res) => {
 
 const updateEvent = asyncHandler(async (req, res) => {
     const user = req.user;
-    const { id, name, description, startAt, endAt, venue, capacity, price, reservedSeats } = req.body;
+    const {
+        id,
+        name,
+        description,
+        startAt,
+        endAt,
+        venue,
+        capacity,
+        price,
+        reservedSeats,
+    } = req.body;
 
     if (!id) {
         return new ApiError(400, 'Event ID is required.');
@@ -193,7 +213,9 @@ const updateEvent = asyncHandler(async (req, res) => {
             capacity: updateData.capacity.toString(),
         }),
         ...(updateData.price && { price: updateData.price.toString() }),
-        ...(updateData.reservedSeats && { reserved_seats: updateData.reservedSeats.toString() }),
+        ...(updateData.reservedSeats && {
+            reserved_seats: updateData.reservedSeats.toString(),
+        }),
     });
 
     return res
@@ -251,22 +273,26 @@ const bookEvent = asyncHandler(async (req, res) => {
         throw new ApiError(404, 'Event not found.');
     }
 
-    const availableSeats = Number(event.capacity) - Number(event.reserved_seats);
+    const availableSeats =
+        Number(event.capacity) - Number(event.reserved_seats);
     if (availableSeats < numberOfSeats) {
         throw new ApiError(400, 'Not enough seats available.');
     }
 
     // Produce a booking request message to Kafka
     await producer.connect();
+    const messageId = randomUUID();
     await producer.send({
         topic: 'booking-requests',
         messages: [
             {
+                key: String(eventId), // partition by event for ordered handling per event
                 value: JSON.stringify({
+                    messageId,
                     userId,
                     eventId,
                     numberOfSeats,
-                    email: req.user.email
+                    email: req.user.email,
                 }),
             },
         ],
@@ -275,6 +301,7 @@ const bookEvent = asyncHandler(async (req, res) => {
 
     const result = {
         message: 'Booking request received and is being processed.',
+        messageId,
     };
 
     return res
