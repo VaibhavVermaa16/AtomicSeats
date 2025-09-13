@@ -32,6 +32,7 @@ export async function reconcileRedisWithPostgres() {
             ends_at: e.endsAt.toISOString(),
             capacity: e.capacity.toString(),
             reserved_seats: e.reservedSeats.toString(),
+            price: (e.price || 0).toString(),
         });
     }
 

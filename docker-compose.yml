@@ -31,6 +31,7 @@ services:
       zookeeper:
         condition: service_healthy
   app:
+    # image: vaibhavvermaa/atomicseats:latest
     build: .
     container_name: atomicseats-app
     environment:
@@ -41,17 +42,3 @@ services:
     command: sh -c "node server.js"
     ports:
       - "3000:3000"
-    volumes:
-      - .:/usr/src/app
-
-  booking-worker:
-    build: .
-    container_name: booking-worker
-    environment:
-      - KAFKA_BROKER=kafka:9092
-      - DATABASE_URL=${DATABASE_URL}
-    depends_on:
-      - kafka
-    command: sh -c "node src/worker/bookingConsumer.js"
-    volumes:
-      - .:/usr/src/app

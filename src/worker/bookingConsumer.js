@@ -28,8 +28,16 @@ async function startBookingConsumer() {
                 .select()
                 .from(Event)
                 .where(eq(Event.id, eventId));
+
             const availableSeats =
                 currentEvent[0].capacity - currentEvent[0].reservedSeats;
+            if (availableSeats < numberOfSeats) {
+                console.error(
+                    `Not enough seats available for event ${eventId}`
+                );
+                reconcileRedisWithPostgres();
+                return; // Skip this booking
+            }
         
             try {
                 await db
@@ -53,9 +61,6 @@ async function startBookingConsumer() {
                 throw new apiError(500, 'Error processing booking');
             }
 
-            // Cache booking details in Redis
-
-            // Cache booking details in Redis (snake_case, string values)
             try {
                 await client.hSet(`booking_${userId}_${eventId}`, {
                     user_id: userId.toString(),
@@ -66,24 +71,16 @@ async function startBookingConsumer() {
 
                 // Update event cache in Redis
 
-                // Update event cache in Redis (consistent with updateEvent)
+                // Update only reserved seats in event cache in Redis (consistent with updateEvent)
                 await client.hSet(`event_${eventId}`, {
-                    event_id: currentEvent[0].id.toString(),
-                    event_name: currentEvent[0].name,
-                    description: currentEvent[0].description,
-                    host_id: currentEvent[0].hostId.toString(),
-                    venue: currentEvent[0].venue,
-                    starts_at: currentEvent[0].startsAt.toISOString(),
-                    ends_at: currentEvent[0].endsAt.toISOString(),
-                    capacity: currentEvent[0].capacity.toString(),
                     reserved_seats: (
                         currentEvent[0].reservedSeats + numberOfSeats
                     ).toString(),
-                    price: currentEvent[0].price.toString(),
                 });
+
             } catch (error) {
                 console.error('Error caching booking details:', error);
-                reconcileRedisWithPostgres()
+                reconcileRedisWithPostgres();
             }
 
             console.log(
@@ -93,4 +90,6 @@ async function startBookingConsumer() {
     });
 }
 
-startBookingConsumer().catch(console.error);
+// startBookingConsumer().catch(console.error);
+
+export { startBookingConsumer };
