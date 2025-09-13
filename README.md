@@ -6,6 +6,10 @@ High-concurrency, event-driven ticket booking that stays consistent under load �
 
 </div>
 
+## 🔗 Deployed Base URL
+
+https://atomicseats.devdevops.co.in
+
 ## Why AtomicSeats?
 
 - Atomic booking pipeline via Kafka workers — decouples API from booking execution
@@ -86,6 +90,17 @@ src/
 - Kafka (kafkajs)
 - Nodemailer (Gmail)
 - Docker + docker-compose
+
+## 🛠️ DevOps & Deployment Features
+
+- Dockerized services (API, workers, Kafka/Zookeeper) with compose for local orchestration
+- Healthcheck endpoint: `GET /health` for liveness/readiness probes
+- Environment-driven configuration (DATABASE_URL, KAFKA_BROKER, Redis, JWT secrets)
+- Graceful shutdown handling (SIGINT/SIGTERM) in `server.js`
+- Scheduled cron job for Redis ↔ Postgres reconciliation to maintain cache correctness
+- Reverse proxy ready (NGINX) with HTTPS (Let’s Encrypt) for TLS termination
+- Horizontal scaling friendly (stateless API + Kafka consumers)
+- Structured logging via morgan and clear error/response format
 
 ## ⚙️ Environment Variables
 
