@@ -1,7 +1,7 @@
 import ApiError from '../utils/apiError.js';
 import ApiResponse from '../utils/apiResponse.js';
 import asyncHandler from '../utils/asyncHandler.js';
-import { db } from '../config/database.js';
+import { db, pgPool } from '../config/database.js';
 import { eq } from 'drizzle-orm';
 import { event as Event } from '../models/events.model.js';
 import { client } from '../config/redis.js';
@@ -17,6 +17,150 @@ import {
     buildEmailForWaitlistConfirmed,
 } from '../services/notification.service.js';
 import { randomUUID } from 'crypto';
+
+// Cancel a user's booking for an event and free seats, then trigger waitlist allocation
+const cancelBooking = asyncHandler(async (req, res) => {
+    if (!req.user) {
+        throw new ApiError(
+            401,
+            'Unauthorized, please login to cancel a booking'
+        );
+    }
+
+    // Accept from body or query for flexibility with DELETE
+    const eventId = Number(req.body?.eventId ?? req.query?.eventId);
+    const bookingId = req.body?.bookingId ?? req.query?.bookingId;
+    const cancelAll =
+        (req.body?.cancelAll ?? req.query?.cancelAll) === 'true' ||
+        req.body?.cancelAll === true;
+
+    if (!eventId) {
+        throw new ApiError(400, 'Event ID is required.');
+    }
+
+    const userId = req.user.id;
+
+    const clientConn = await pgPool.connect();
+    let seatsFreed = 0;
+    try {
+        await clientConn.query('BEGIN');
+
+        // Lock the event row to ensure consistent reservedSeats update
+        const eRes = await clientConn.query(
+            `SELECT id, capacity, "reservedSeats" FROM events WHERE id = $1 FOR UPDATE`,
+            [eventId]
+        );
+        if (eRes.rowCount === 0) {
+            await clientConn.query('ROLLBACK');
+            throw new ApiError(404, 'Event not found.');
+        }
+
+        // Determine which bookings to cancel
+        let bookingsRes;
+        if (bookingId) {
+            bookingsRes = await clientConn.query(
+                `SELECT id, "numberOfSeats" FROM booking WHERE id = $1 AND "userId" = $2 AND "eventId" = $3 FOR UPDATE`,
+                [bookingId, userId, eventId]
+            );
+        } else {
+            bookingsRes = await clientConn.query(
+                `SELECT id, "numberOfSeats" FROM booking WHERE "userId" = $1 AND "eventId" = $2 FOR UPDATE`,
+                [userId, eventId]
+            );
+        }
+
+        if (bookingsRes.rowCount === 0) {
+            await clientConn.query('ROLLBACK');
+            throw new ApiError(
+                404,
+                'No booking found to cancel for this event.'
+            );
+        }
+
+        // If a specific bookingId is not provided and cancelAll is false, cancel only the most recent row
+        let rowsToCancel = bookingsRes.rows;
+        if (!bookingId && !cancelAll) {
+            // Pick the last inserted booking by highest id
+            const maxIdRow = rowsToCancel.reduce((a, b) =>
+                a.id > b.id ? a : b
+            );
+            rowsToCancel = [maxIdRow];
+        }
+
+        const idList = rowsToCancel.map((r) => r.id);
+        seatsFreed = rowsToCancel.reduce(
+            (acc, r) => acc + Number(r.numberOfSeats || 0),
+            0
+        );
+        if (seatsFreed <= 0) {
+            await clientConn.query('ROLLBACK');
+            throw new ApiError(
+                400,
+                'Invalid booking state; seats to free is zero.'
+            );
+        }
+
+        // Delete the booking rows
+        await clientConn.query(
+            `DELETE FROM booking WHERE id = ANY($1::int[])`,
+            [idList]
+        );
+
+        // Decrease reserved seats, clamp to 0
+        const updRes = await clientConn.query(
+            `UPDATE events SET "reservedSeats" = GREATEST("reservedSeats" - $1, 0)
+             WHERE id = $2 RETURNING "reservedSeats"`,
+            [seatsFreed, eventId]
+        );
+        const newReserved = Number(updRes.rows?.[0]?.reservedSeats || 0);
+
+        await clientConn.query('COMMIT');
+
+        // Update Redis cache for event reserved seats
+        try {
+            await client.hSet(`event_${eventId}`, {
+                reserved_seats: String(newReserved),
+            });
+        } catch (e) {
+            console.error(
+                'Failed updating Redis reserved seats after cancel:',
+                e
+            );
+        }
+
+        // Trigger async waitlist allocation via Kafka
+        try {
+            await producer.connect();
+            await producer.send({
+                topic: 'waitlist-allocation',
+                messages: [
+                    {
+                        key: String(eventId),
+                        value: JSON.stringify({ eventId }),
+                    },
+                ],
+            });
+            await producer.disconnect();
+        } catch (e) {
+            console.error('Failed to publish waitlist allocation trigger:', e);
+        }
+
+        return res.status(200).json(
+            new ApiResponse(200, 'Booking cancelled successfully', {
+                eventId,
+                seatsFreed,
+                bookingsCancelled: idList.length,
+            })
+        );
+    } catch (err) {
+        try {
+            await clientConn.query('ROLLBACK');
+        } catch {}
+        throw err;
+    } finally {
+        clientConn.release();
+    }
+});
 
 const getAllEvents = asyncHandler(async (req, res) => {
     // Try to get all events from Redis
@@ -353,4 +497,11 @@ const bookEvent = asyncHandler(async (req, res) => {
         .json(new ApiResponse(200, result, 'Event Booking in process'));
 });
 
-export { getAllEvents, createEvent, updateEvent, deleteEvent, bookEvent };
+export {
+    getAllEvents,
+    createEvent,
+    updateEvent,
+    deleteEvent,
+    bookEvent,
+    cancelBooking,
+};

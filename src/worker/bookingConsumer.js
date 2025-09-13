@@ -22,7 +22,9 @@ async function sendBookingNotification(
     numberOfSeats,
     totalCost,
     email,
-    success
+    success,
+    bookingId,
+    bookingIds
 ) {
     await producer.connect();
     await producer.send({
@@ -36,6 +38,8 @@ async function sendBookingNotification(
                     totalCost,
                     email,
                     success,
+                    bookingId,
+                    bookingIds,
                 }),
             },
         ],
@@ -85,6 +89,7 @@ async function handleAllocationTrigger(eventId) {
                     eventId,
                     numberOfSeats: a.numberOfSeats,
                     totalCost: a.totalCost,
+                    bookingIds: a.bookingIds,
                 }),
             }),
         }));
@@ -159,6 +164,8 @@ async function startBookingConsumer() {
             }
 
             let totalCost = 0;
+            let bookingId; // first id for backward compatibility
+            let bookingIds = [];
             let bookedSeats = 0;
             try {
                 const clientConn = await pgPool.connect();
@@ -254,11 +261,17 @@ async function startBookingConsumer() {
                     );
 
                     totalCost = bookedSeats * price;
-                    await clientConn.query(
-                        `INSERT INTO booking ("userId", "eventId", "numberOfSeats", cost)
-             VALUES ($1, $2, $3, $4)`,
-                        [userId, eventId, bookedSeats, totalCost]
-                    );
+                    // Insert one row per seat for unique ticket numbers
+                    for (let i = 0; i < bookedSeats; i++) {
+                        const insRes = await clientConn.query(
+                            `INSERT INTO booking ("userId", "eventId", "numberOfSeats", cost)
+                 VALUES ($1, $2, 1, $3) RETURNING id`,
+                            [userId, eventId, price]
+                        );
+                        const id = insRes.rows?.[0]?.id;
+                        if (id) bookingIds.push(id);
+                    }
+                    bookingId = bookingIds[0];
 
                     await clientConn.query('COMMIT');
 
@@ -337,11 +350,30 @@ async function startBookingConsumer() {
             }
 
             try {
-                await client.hSet(`booking_${userId}_${eventId}`, {
+                // Update or create Redis booking summary per user-event
+                const key = `booking_${userId}_${eventId}`;
+                const existing = await client.hGet(key, 'booking_ids');
+                let combinedIds = bookingIds;
+                if (existing) {
+                    try {
+                        const prev = JSON.parse(existing);
+                        if (Array.isArray(prev))
+                            combinedIds = [...prev, ...bookingIds];
+                    } catch {}
+                }
+                await client.hSet(key, {
                     user_id: userId.toString(),
                     event_id: eventId.toString(),
-                    cost: totalCost.toString(),
-                    number_of_seats: bookedSeats.toString(),
+                    cost: (
+                        Number((await client.hGet(key, 'cost')) || '0') +
+                        Number(totalCost)
+                    ).toString(),
+                    number_of_seats: (
+                        Number(
+                            (await client.hGet(key, 'number_of_seats')) || '0'
+                        ) + Number(bookedSeats)
+                    ).toString(),
+                    booking_ids: JSON.stringify(combinedIds),
                 });
 
                 // Update event cache in Redis
@@ -372,7 +404,9 @@ async function startBookingConsumer() {
                 bookedSeats,
                 totalCost,
                 email,
-                true
+                true,
+                bookingId,
+                bookingIds
             );
         },
     });

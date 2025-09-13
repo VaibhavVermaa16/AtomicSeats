@@ -61,10 +61,31 @@ export function buildEmailForBooking({
     numberOfSeats,
     totalCost,
     success,
+    bookingId,
+    bookingIds,
 }) {
+    const ids =
+        bookingIds && bookingIds.length
+            ? bookingIds
+            : bookingId
+              ? [bookingId]
+              : [];
     const subject = `Booking ${success ? 'Confirmed' : 'Failed'}: ${eventId}`;
-    const text = `Your(${userId}) booking for ${numberOfSeats} seats at event ${eventId} has been ${success ? 'confirmed' : 'failed'}. Total cost: ${totalCost}`;
-    const html = `<p>Your booking for <strong>${numberOfSeats}</strong> seats at event <strong>${eventId}</strong> has been <strong>${success ? 'confirmed' : 'failed'}</strong>. Total cost: <strong>${totalCost}</strong></p>`;
+    const textLines = [
+        `Your(${userId}) booking for ${numberOfSeats} seats at event ${eventId} has been ${success ? 'confirmed' : 'failed'}.`,
+        `Total cost: ${totalCost}.`,
+    ];
+    if (ids.length) {
+        textLines.push(`Ticket #s: ${ids.join(', ')}`);
+    }
+    const text = textLines.join(' ');
+
+    const ticketsHtml = ids.length
+        ? `<ul>${ids.map((id) => `<li><code>${id}</code></li>`).join('')}</ul>`
+        : '';
+    const html = `<p>Your booking for <strong>${numberOfSeats}</strong> seats at event <strong>${eventId}</strong> has been <strong>${
+        success ? 'confirmed' : 'failed'
+    }</strong>.<br/>Total cost: <strong>${totalCost}</strong></p>${ticketsHtml}`;
     return { to: userEmail, subject, text, html };
 }
 
@@ -86,10 +107,25 @@ export function buildEmailForWaitlistConfirmed({
     eventId,
     numberOfSeats,
     totalCost,
+    bookingId,
+    bookingIds,
 }) {
+    const ids =
+        bookingIds && bookingIds.length
+            ? bookingIds
+            : bookingId
+              ? [bookingId]
+              : [];
     const subject = `Good news! Seats confirmed for event ${eventId}`;
-    const text = `Hi ${userId}, your waitlisted request for ${numberOfSeats} seat(s) at event ${eventId} is now confirmed. Total cost: ${totalCost}.`;
-    const html = `<p>Hi <strong>${userId}</strong>, your <em>waitlisted</em> request for <strong>${numberOfSeats}</strong> seat(s) at event <strong>${eventId}</strong> is now <strong>confirmed</strong>. Total cost: <strong>${totalCost}</strong>.</p>`;
+    const text = `Hi ${userId}, your waitlisted request for ${numberOfSeats} seat(s) at event ${eventId} is now confirmed. Total cost: ${totalCost}. ${
+        ids.length ? `Ticket #s: ${ids.join(', ')}` : ''
+    }`;
+    const ticketsHtml = ids.length
+        ? `<br/><strong>Ticket #s:</strong> <ul>${ids
+              .map((id) => `<li><code>${id}</code></li>`)
+              .join('')}</ul>`
+        : '';
+    const html = `<p>Hi <strong>${userId}</strong>, your <em>waitlisted</em> request for <strong>${numberOfSeats}</strong> seat(s) at event <strong>${eventId}</strong> is now <strong>confirmed</strong>. Total cost: <strong>${totalCost}</strong>.${ticketsHtml}</p>`;
     return { to: userEmail, subject, text, html };
 }
 
@@ -107,7 +143,9 @@ export async function notifyUserLegacy(
     numberOfSeats,
     totalCost,
     success,
-    receiver
+    receiver,
+    bookingId,
+    bookingIds
 ) {
     const emailPayload = buildEmailForBooking({
         userEmail: receiver,
@@ -116,6 +154,8 @@ export async function notifyUserLegacy(
         numberOfSeats,
         totalCost,
         success,
+        bookingId,
+        bookingIds,
     });
     return sendNotification({
         channel: NotificationChannel.EMAIL,

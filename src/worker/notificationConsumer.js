@@ -41,6 +41,8 @@ export const startNotificationConsumer = async () => {
                     totalCost,
                     email,
                     success,
+                    bookingId,
+                    bookingIds,
                 } = parsed;
                 console.log(
                     `📩 [legacy] Notifying user ${userId} for event ${eventId} success=${success}`
@@ -53,6 +55,8 @@ export const startNotificationConsumer = async () => {
                         numberOfSeats,
                         totalCost: totalCost || 0,
                         success,
+                        bookingId,
+                        bookingIds,
                     });
                     await sendNotification({
                         channel: NotificationChannel.EMAIL,

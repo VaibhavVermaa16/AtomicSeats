@@ -83,7 +83,7 @@ export async function waitlistLength(eventId) {
 // Attempt to allocate seats to waitlisted users in FIFO until capacity filled or list exhausted.
 // Uses serializable transaction to ensure correctness.
 export async function allocateFromWaitlist({ eventId }) {
-    const allocations = []; // { userId, email, numberOfSeats, totalCost }
+    const allocations = []; // { userId, email, numberOfSeats, totalCost, bookingIds }
 
     const clientConn = await pgPool.connect();
     try {
@@ -208,16 +208,23 @@ export async function allocateFromWaitlist({ eventId }) {
             }
 
             // Create booking record for allocated seats
-            await clientConn.query(
-                `INSERT INTO booking ("userId", "eventId", "numberOfSeats", cost) VALUES ($1, $2, $3, $4)`,
-                [entry.userId, eventId, seatsToAllocate, totalCost]
-            );
+            // Create one row per seat for unique ticket numbers
+            const bookingIds = [];
+            for (let i = 0; i < seatsToAllocate; i++) {
+                const insRes = await clientConn.query(
+                    `INSERT INTO booking ("userId", "eventId", "numberOfSeats", cost) VALUES ($1, $2, 1, $3) RETURNING id`,
+                    [entry.userId, eventId, unitPrice]
+                );
+                const id = insRes.rows?.[0]?.id;
+                if (id) bookingIds.push(id);
+            }
 
             allocations.push({
                 userId: entry.userId,
                 email,
                 numberOfSeats: seatsToAllocate,
                 totalCost,
+                bookingIds,
             });
 
             // If we just did a partial allocation, we've exhausted availability; exit loop

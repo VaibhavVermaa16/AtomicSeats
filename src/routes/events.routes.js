@@ -5,6 +5,7 @@ import {
     updateEvent,
     deleteEvent,
     bookEvent,
+    cancelBooking,
 } from '../controllers/events.controller.js';
 import { verifyToken } from '../middleware/auth.middleware.js';
 import RateLimiter from '../middleware/ratelimiter.middleware.js';
@@ -21,5 +22,8 @@ router.route('/update').post(verifyToken, RateLimiter(5, 60), updateEvent);
 router.route('/delete').post(verifyToken, RateLimiter(5, 60), deleteEvent);
 
 router.route('/book').post(verifyToken, RateLimiter(5, 60), bookEvent);
+
+// Cancel booking (delete ticket) for the authenticated user
+router.route('/book').delete(verifyToken, RateLimiter(5, 60), cancelBooking);
 
 export default router;
