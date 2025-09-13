@@ -4,7 +4,6 @@ import asyncHandler from '../utils/asyncHandler.js';
 import { db } from '../config/database.js';
 import { eq } from 'drizzle-orm';
 import { event as Event } from '../models/events.model.js';
-import { booking } from '../models/booking.models.js';
 import { client } from '../config/redis.js';
 import { producer } from '../utils/kafka.js';
 
@@ -267,6 +266,7 @@ const bookEvent = asyncHandler(async (req, res) => {
                     userId,
                     eventId,
                     numberOfSeats,
+                    email: req.user.email
                 }),
             },
         ],

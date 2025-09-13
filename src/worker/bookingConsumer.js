@@ -1,11 +1,34 @@
-import { consumer } from '../utils/kafka.js';
+import { producer, bookingConsumer } from '../utils/kafka.js';
 import { db } from '../config/database.js';
 import { event as Event } from '../models/events.model.js';
 import { booking } from '../models/booking.models.js';
 import { eq } from 'drizzle-orm';
 import { client } from '../config/redis.js';
-import apiError from '../utils/apiError.js';
 import { reconcileRedisWithPostgres } from '../utils/redisReconciler.js';
+
+const consumer = bookingConsumer;
+
+async function sendBookingNotification(userId, eventId, numberOfSeats, totalCost, email, success) {
+    await producer.connect();
+    await producer.send({
+        topic: 'notify-user',
+        messages: [
+            {
+                value: JSON.stringify({
+                    userId,
+                    eventId,
+                    numberOfSeats,
+                    totalCost,
+                    email,
+                    success,
+                }),
+            },
+        ],
+    });
+    console.log(
+        `📩 Notification sent to user ${userId} for event ${eventId} | Success: ${success}`
+    );
+}
 
 async function startBookingConsumer() {
     await consumer.connect();
@@ -16,7 +39,7 @@ async function startBookingConsumer() {
 
     await consumer.run({
         eachMessage: async ({ message }) => {
-            const { userId, eventId, numberOfSeats } = JSON.parse(
+            const { userId, eventId, numberOfSeats, email } = JSON.parse(
                 message.value.toString()
             );
 
@@ -35,10 +58,18 @@ async function startBookingConsumer() {
                 console.error(
                     `Not enough seats available for event ${eventId}`
                 );
+                await sendBookingNotification(
+                    userId,
+                    eventId,
+                    numberOfSeats,
+                    0,
+                    email,
+                    false
+                );
                 reconcileRedisWithPostgres();
                 return; // Skip this booking
             }
-        
+
             try {
                 await db
                     .update(Event)
@@ -58,7 +89,15 @@ async function startBookingConsumer() {
                     .returning();
             } catch (error) {
                 console.error('Error processing booking:', error);
-                throw new apiError(500, 'Error processing booking');
+                await sendBookingNotification(
+                    userId,
+                    eventId,
+                    numberOfSeats,
+                    0,
+                    email,
+                    false
+                );
+                return; // Skip this booking
             }
 
             try {
@@ -70,14 +109,11 @@ async function startBookingConsumer() {
                 });
 
                 // Update event cache in Redis
-
-                // Update only reserved seats in event cache in Redis (consistent with updateEvent)
                 await client.hSet(`event_${eventId}`, {
                     reserved_seats: (
                         currentEvent[0].reservedSeats + numberOfSeats
                     ).toString(),
                 });
-
             } catch (error) {
                 console.error('Error caching booking details:', error);
                 reconcileRedisWithPostgres();
@@ -86,10 +122,19 @@ async function startBookingConsumer() {
             console.log(
                 `Booking successful for user ${userId} on event ${eventId} for price ${numberOfSeats * currentEvent[0].price} for ${numberOfSeats} seats`
             );
+
+            await sendBookingNotification(
+                userId,
+                eventId,
+                numberOfSeats,
+                numberOfSeats * currentEvent[0].price,
+                email,
+                true
+            );
         },
     });
 }
 
-// startBookingConsumer().catch(console.error);
+startBookingConsumer().catch(console.error);
 
-export { startBookingConsumer };
+// export { startBookingConsumer };

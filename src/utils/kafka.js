@@ -6,6 +6,7 @@ const kafka = new Kafka({
 });
 
 const producer = kafka.producer();
-const consumer = kafka.consumer({ groupId: 'booking-group' });
+const bookingConsumer = kafka.consumer({ groupId: 'booking-group' });
+const notificationConsumer = kafka.consumer({ groupId: 'notification-group' });
 
-export { kafka, producer, consumer };
+export { kafka, producer, bookingConsumer, notificationConsumer };
