@@ -7,6 +7,7 @@ import cookieParser from 'cookie-parser';
 
 import userRoutes from './routes/user.routes.js';
 import eventsRoutes from './routes/events.routes.js';
+import adminRoutes from './routes/admin.routes.js';
 
 dotenv.config();
 
@@ -39,6 +40,7 @@ app.get('/health', (req, res) => {
 // API routes
 app.use('/api/user', userRoutes);
 app.use('/api/events', eventsRoutes);
+app.use('/api/admin', adminRoutes);
 
 // 404 handler
 app.use((req, res) => {

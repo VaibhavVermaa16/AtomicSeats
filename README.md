@@ -61,6 +61,7 @@ src/
 │   ├── database.js         # Drizzle + node-postgres (DATABASE_URL)
 │   └── redis.js            # Redis client (host/port/password)
 ├── controllers/
+│   ├── admin.controller.js     # Admin: manage events + analytics
 │   ├── events.controller.js    # Events CRUD + booking producer
 │   └── user.controller.js      # Auth: register/login/logout
 ├── middleware/
@@ -71,6 +72,7 @@ src/
 │   ├── events.model.js         # Events table
 │   └── booking.models.js       # Bookings table
 ├── routes/
+│   ├── admin.routes.js         # /api/admin endpoints (admin only)
 │   ├── user.routes.js          # /api/user endpoints
 │   └── events.routes.js        # /api/events endpoints
 ├── utils/
@@ -258,6 +260,26 @@ curl -X POST http://localhost:3000/api/events/create \
         "price": 1200
     }'
 ```
+
+Admin (prefix: /api/admin, requires role=admin)
+
+- GET /api/admin/events → 200 [events] (list all events)
+- POST /api/admin/events { name, description, startsAt, endsAt, venue, capacity, price, hostId? } → 201
+- PATCH /api/admin/events { id, ...fields } → 200 (update any event)
+- DELETE /api/admin/events { id } → 200
+- GET /api/admin/analytics → 200 { totalBookings, mostPopularEvents, overallCapacity, perEventUtilization }
+
+Example: analytics
+
+```bash
+curl -H "Authorization: Bearer $ACCESS_TOKEN" \
+    http://localhost:3000/api/admin/analytics
+```
+
+Notes
+
+- Admin routes enforce JWT auth and role-based middleware. Set your user role to `admin` to access these.
+- POST/PUT/PATCH body fields should be valid ISO8601 dates for startsAt/endsAt and numbers for capacity/price.
 
 ## 🎟️ Booking Flow
 
