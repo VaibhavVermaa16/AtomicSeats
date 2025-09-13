@@ -10,6 +10,7 @@
         "format": "prettier --write .",
         "format:check": "prettier --check .",
         "test": "echo \"Error: no test specified\" && exit 1",
+        "test:concurrency": "docker compose run --rm tests",
         "db:generate": "drizzle-kit generate",
         "db:migrate": "drizzle-kit migrate"
     },

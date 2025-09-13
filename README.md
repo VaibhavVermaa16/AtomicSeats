@@ -317,3 +317,36 @@ Issues and PRs welcome. Please include context, reproduction steps, and proposed
 
 ISC
 
+
+## 🧪 Concurrency & Race Condition Test
+
+An interactive test harness is included to simulate concurrent bookings end-to-end via Docker Compose:
+
+What it does
+- Prompts for your registered email and password
+- Logs in and captures the access token and cookies
+- Creates a fresh event
+- Fires multiple parallel booking requests for that event
+
+One-line command
+
+```
+npm run test:concurrency
+```
+
+Configurable via env (defaults shown):
+
+```
+BASE_URL=http://app:3000
+CONCURRENCY=5
+SEATS_PER_BOOKING=2
+EVENT_CAPACITY=10
+EVENT_PRICE=100
+WAIT_TIMEOUT_MS=120000
+WAIT_INTERVAL_MS=1500
+```
+
+Notes
+- Bookings are processed asynchronously by the booking worker; check its logs to confirm final allocations and ensure no overselling.
+- Rate limits apply; keep CONCURRENCY modest or adjust limiter for testing.
+

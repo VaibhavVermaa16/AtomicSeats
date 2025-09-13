@@ -80,3 +80,25 @@ services:
       kafka:
         condition: service_healthy
     command: sh -c "node src/worker/notificationConsumer.js"
+
+  tests:
+    build: .
+    container_name: atomicseats-tests
+    stdin_open: true
+    tty: true
+    environment:
+      - BASE_URL=http://app:3000
+      - CONCURRENCY=5
+      - SEATS_PER_BOOKING=3
+      - EVENT_CAPACITY=10
+      - EVENT_PRICE=100
+      - WAIT_TIMEOUT_MS=120000
+      - WAIT_INTERVAL_MS=1500
+      - DATABASE_URL=${DATABASE_URL}
+    depends_on:
+      app:
+        condition: service_started
+      booking-worker:
+        condition: service_started
+    working_dir: /usr/src/app
+    command: sh -c "node tests/runConcurrencyTest.js"
