@@ -6,6 +6,16 @@ import { eq } from 'drizzle-orm';
 import { event as Event } from '../models/events.model.js';
 import { client } from '../config/redis.js';
 import { producer } from '../utils/kafka.js';
+import {
+    isWaitlistClosed,
+    allocateFromWaitlist,
+    setWaitlistClosed,
+} from '../utils/waitlist.js';
+import {
+    NotificationChannel,
+    NotificationType,
+    buildEmailForWaitlistConfirmed,
+} from '../services/notification.service.js';
 import { randomUUID } from 'crypto';
 
 const getAllEvents = asyncHandler(async (req, res) => {
@@ -163,6 +173,7 @@ const updateEvent = asyncHandler(async (req, res) => {
         venue,
         capacity,
         price,
+        waitlistClosed,
         reservedSeats,
     } = req.body;
 
@@ -189,6 +200,10 @@ const updateEvent = asyncHandler(async (req, res) => {
     if (venue !== undefined) updateData.venue = venue;
     if (capacity !== undefined) updateData.capacity = capacity;
     if (price !== undefined) updateData.price = price;
+    // Allow host to mark waitlist closed via Redis flag (not stored in DB)
+    if (waitlistClosed !== undefined) {
+        await setWaitlistClosed(id, Boolean(waitlistClosed));
+    }
     if (reservedSeats !== undefined) updateData.reservedSeats = reservedSeats;
 
     if (Object.keys(updateData).length === 0) {
@@ -198,29 +213,59 @@ const updateEvent = asyncHandler(async (req, res) => {
     await db.update(Event).set(updateData).where(eq(Event.id, id));
 
     await client.hSet(`event_${id}`, {
-        ...(updateData.name && { event_name: updateData.name }),
-        ...(updateData.description && {
+        ...(updateData.name !== undefined && { event_name: updateData.name }),
+        ...(updateData.description !== undefined && {
             description: updateData.description,
         }),
-        ...(updateData.startsAt && {
+        ...(updateData.startsAt !== undefined && {
             starts_at: updateData.startsAt.toISOString(),
         }),
-        ...(updateData.endsAt && {
+        ...(updateData.endsAt !== undefined && {
             ends_at: updateData.endsAt.toISOString(),
         }),
-        ...(updateData.venue && { venue: updateData.venue }),
-        ...(updateData.capacity && {
+        ...(updateData.venue !== undefined && { venue: updateData.venue }),
+        ...(updateData.capacity !== undefined && {
             capacity: updateData.capacity.toString(),
         }),
-        ...(updateData.price && { price: updateData.price.toString() }),
-        ...(updateData.reservedSeats && {
+        ...(updateData.price !== undefined && {
+            price: updateData.price.toString(),
+        }),
+        ...(updateData.reservedSeats !== undefined && {
             reserved_seats: updateData.reservedSeats.toString(),
         }),
     });
 
-    return res
-        .status(200)
-        .json(new ApiResponse(200, 'Event updated successfully', updateData));
+    // If capacity increased or reservedSeats changed, trigger async waitlist allocation via Kafka
+    if (
+        updateData.capacity !== undefined ||
+        updateData.reservedSeats !== undefined
+    ) {
+        try {
+            console.log('Publishing waitlist allocation trigger for event', id);
+            await producer.connect();
+            await producer.send({
+                topic: 'waitlist-allocation',
+                messages: [
+                    {
+                        key: String(id),
+                        value: JSON.stringify({ eventId: id }),
+                    },
+                ],
+            });
+            await producer.disconnect();
+        } catch (e) {
+            console.error('Failed to publish waitlist allocation trigger:', e);
+        }
+    }
+
+    return res.status(200).json(
+        new ApiResponse(200, 'Event updated successfully', {
+            ...updateData,
+            ...(waitlistClosed !== undefined
+                ? { waitlistClosed: Boolean(waitlistClosed) }
+                : {}),
+        })
+    );
 });
 
 const deleteEvent = asyncHandler(async (req, res) => {
@@ -273,11 +318,9 @@ const bookEvent = asyncHandler(async (req, res) => {
         throw new ApiError(404, 'Event not found.');
     }
 
-    const availableSeats =
-        Number(event.capacity) - Number(event.reserved_seats);
-    if (availableSeats < numberOfSeats) {
-        throw new ApiError(400, 'Not enough seats available.');
-    }
+    // We no longer block at the API when seats appear insufficient; the worker will
+    // either confirm or place the user on the waitlist (or inform if waitlist closed).
+    const waitlistClosed = await isWaitlistClosed(eventId);
 
     // Produce a booking request message to Kafka
     await producer.connect();
@@ -293,6 +336,7 @@ const bookEvent = asyncHandler(async (req, res) => {
                     eventId,
                     numberOfSeats,
                     email: req.user.email,
+                    waitlistClosed,
                 }),
             },
         ],
