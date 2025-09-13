@@ -56,6 +56,10 @@ export async function reconcileRedisWithPostgres() {
             event_id: b.eventId.toString(),
             number_of_seats: b.numberOfSeats.toString(),
             cost: b.cost.toString(),
+            status: b.status || 'confirmed',
+            cancelled_at: b.cancelledAt
+                ? new Date(b.cancelledAt).toISOString()
+                : '',
             // ...add other booking fields as needed...
         });
     }

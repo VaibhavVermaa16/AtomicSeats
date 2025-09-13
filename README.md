@@ -235,6 +235,22 @@ User (prefix: /api/user)
 - POST /api/user/register { username, name, email, password, role } → 201
 - POST /api/user/login { email, password } → 200 { user, accessToken, refreshToken }
 - POST /api/user/logout (requires auth)
+- GET /api/user/bookings (requires auth) → Booking history with cursor pagination
+    - Query params:
+        - limit: number (default 20, max 100)
+        - cursor: base64 token for keyset pagination (opaque)
+        - eventId: filter to a specific event
+        - status: confirmed | cancelled
+        - from, to: ISO date range over booking createdAt
+        - view: tickets | summary (summary groups by event)
+    - Response:
+        - data.items: array of tickets or grouped summaries
+        - data.pageInfo: { hasMore, nextCursor }
+    - Example:
+        ```bash
+        curl -H "Authorization: Bearer $ACCESS_TOKEN" \
+            'http://localhost:3000/api/user/bookings?limit=20&view=summary'
+        ```
 
 Events (prefix: /api/events, requires auth)
 

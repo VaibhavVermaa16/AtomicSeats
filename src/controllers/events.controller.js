@@ -100,9 +100,9 @@ const cancelBooking = asyncHandler(async (req, res) => {
             );
         }
 
-        // Delete the booking rows
+        // Soft-delete the booking rows (preserve history)
         await clientConn.query(
-            `DELETE FROM booking WHERE id = ANY($1::int[])`,
+            `UPDATE booking SET status = 'cancelled', "cancelledAt" = NOW() WHERE id = ANY($1::int[])`,
             [idList]
         );
 

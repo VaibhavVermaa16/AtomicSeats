@@ -8,9 +8,11 @@ import {
 import ApiError from '../utils/apiError.js';
 import ApiResponse from '../utils/apiResponse.js';
 import asyncHandler from '../utils/asyncHandler.js';
-import { db } from '../config/database.js';
+import { db, pgPool } from '../config/database.js';
 import { eq } from 'drizzle-orm';
 import { client } from '../config/redis.js';
+import { booking as Booking } from '../models/booking.models.js';
+import { event as Event } from '../models/events.model.js';
 
 const generateAccessAndRefreshToken = async (userId) => {
     try {
@@ -198,3 +200,155 @@ const logOutUser = asyncHandler(async (req, res) => {
 });
 
 export { getUsers, registerUser, loginUser, logOutUser };
+
+// GET /api/user/bookings
+// Query params: limit, cursor, eventId, status, from, to, view
+// - cursor encodes createdAt and id for keyset: base64(JSON.stringify({ t, id }))
+const getBookingHistory = asyncHandler(async (req, res) => {
+    if (!req.user) throw new ApiError(401, 'Unauthorized');
+    const userId = req.user.id;
+
+    const limit = Math.max(1, Math.min(100, Number(req.query.limit) || 20));
+    const view = (req.query.view || 'tickets').toLowerCase(); // 'tickets' | 'summary'
+    const eventId = req.query.eventId ? Number(req.query.eventId) : undefined;
+    const status = req.query.status?.toLowerCase(); // 'confirmed' | 'cancelled'
+    const from = req.query.from ? new Date(req.query.from) : undefined;
+    const to = req.query.to ? new Date(req.query.to) : undefined;
+    const cursor = req.query.cursor;
+
+    // Build SQL with keyset pagination (createdAt DESC, id DESC)
+    // Use pgPool for flexibility with raw SQL + joins
+    const params = [userId];
+    let where = 'b."userId" = $1';
+    let idx = params.length + 1;
+    if (eventId) {
+        params.push(eventId);
+        where += ` AND b."eventId" = $${idx++}`;
+    }
+    if (status === 'confirmed' || status === 'cancelled') {
+        params.push(status);
+        where += ` AND b.status = $${idx++}`;
+    }
+    if (from && !isNaN(from.getTime())) {
+        params.push(from);
+        where += ` AND b."createdAt" >= $${idx++}`;
+    }
+    if (to && !isNaN(to.getTime())) {
+        params.push(to);
+        where += ` AND b."createdAt" <= $${idx++}`;
+    }
+
+    // Decode cursor: { t: ISO string, id: number }
+    let tCursor, idCursor;
+    if (cursor) {
+        try {
+            const decoded = JSON.parse(
+                Buffer.from(cursor, 'base64').toString('utf8')
+            );
+            tCursor = decoded.t ? new Date(decoded.t) : undefined;
+            idCursor = decoded.id ? Number(decoded.id) : undefined;
+        } catch {}
+    }
+    if (tCursor && idCursor) {
+        params.push(tCursor);
+        params.push(idCursor);
+        where += ` AND (b."createdAt" < $${idx++} OR (b."createdAt" = $${idx - 1} AND b.id < $${idx++}))`;
+    }
+
+    const sql = `
+        SELECT b.id, b."eventId", b."numberOfSeats", b.cost, b."createdAt", b."cancelledAt", b.status,
+               e.name AS event_name, e.venue, e."startsAt", e."endsAt", e.price
+        FROM booking b
+        JOIN events e ON e.id = b."eventId"
+        WHERE ${where}
+        ORDER BY b."createdAt" DESC, b.id DESC
+        LIMIT ${limit + 1}
+    `;
+
+    const result = await pgPool.query(sql, params);
+    const rows = result.rows || [];
+    const hasMore = rows.length > limit;
+    const pageRows = hasMore ? rows.slice(0, limit) : rows;
+
+    // Compute next cursor
+    let nextCursor = undefined;
+    if (hasMore) {
+        const last = pageRows[pageRows.length - 1];
+        nextCursor = Buffer.from(
+            JSON.stringify({ t: last.createdAt, id: last.id })
+        ).toString('base64');
+    }
+
+    if (view === 'summary') {
+        // Group by eventId
+        const map = new Map();
+        for (const r of pageRows) {
+            const key = r.eventId;
+            if (!map.has(key)) {
+                map.set(key, {
+                    eventId: r.eventId,
+                    event: {
+                        name: r.event_name,
+                        venue: r.venue,
+                        startsAt: r.startsAt,
+                        endsAt: r.endsAt,
+                        price: Number(r.price || 0),
+                    },
+                    totalTickets: 0,
+                    totalCost: 0,
+                    activeTickets: 0,
+                    cancelledTickets: 0,
+                    firstBookedAt: r.createdAt,
+                    lastBookedAt: r.createdAt,
+                });
+            }
+            const s = map.get(key);
+            s.totalTickets += Number(r.numberOfSeats || 0);
+            s.totalCost += Number(r.cost || 0);
+            if (r.status === 'cancelled') s.cancelledTickets += 1;
+            else s.activeTickets += 1;
+            if (r.createdAt < s.firstBookedAt) s.firstBookedAt = r.createdAt;
+            if (r.createdAt > s.lastBookedAt) s.lastBookedAt = r.createdAt;
+        }
+        const items = Array.from(map.values());
+        return res
+            .status(200)
+            .json(
+                new ApiResponse(
+                    200,
+                    { items, pageInfo: { hasMore, nextCursor } },
+                    'Booking history (summary)'
+                )
+            );
+    }
+
+    // Default: tickets view (one per booking row)
+    const items = pageRows.map((r) => ({
+        id: r.id,
+        eventId: r.eventId,
+        event: {
+            name: r.event_name,
+            venue: r.venue,
+            startsAt: r.startsAt,
+            endsAt: r.endsAt,
+            price: Number(r.price || 0),
+        },
+        numberOfSeats: Number(r.numberOfSeats || 0),
+        cost: Number(r.cost || 0),
+        status: r.status,
+        createdAt: r.createdAt,
+        cancelledAt: r.cancelledAt,
+    }));
+
+    return res
+        .status(200)
+        .json(
+            new ApiResponse(
+                200,
+                { items, pageInfo: { hasMore, nextCursor } },
+                'Booking history'
+            )
+        );
+});
+
+export { getBookingHistory };

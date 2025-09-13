@@ -3,6 +3,7 @@ import {
     registerUser,
     loginUser,
     logOutUser,
+    getBookingHistory,
 } from '../controllers/user.controller.js';
 import { verifyToken } from '../middleware/auth.middleware.js';
 import RateLimiter from '../middleware/ratelimiter.middleware.js';
@@ -28,5 +29,10 @@ router.route('/register').post(RateLimiter(5, 60), registerUser);
 router.route('/login').post(RateLimiter(5, 60), loginUser);
 
 router.route('/logout').post(verifyToken, logOutUser);
+
+// Booking history for authenticated user
+router
+    .route('/bookings')
+    .get(verifyToken, RateLimiter(30, 60), getBookingHistory);
 
 export default router;
