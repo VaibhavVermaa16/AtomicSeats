@@ -109,40 +109,86 @@ export async function allocateFromWaitlist({ eventId }) {
             const entry = JSON.parse(head);
             const available = capacity - reservedSeats;
             if (available <= 0) break;
-            if (entry.numberOfSeats > available) break; // cannot satisfy head fully; stop to preserve FIFO fairness
 
-            // Pop head and allocate
-            await client.lPop(wlKey(eventId));
-            // Delete corresponding row from DB waitlist
-            try {
-                const rows = await db
-                    .select({ id: Waitlist.id })
-                    .from(Waitlist)
-                    .where(
-                        and(
-                            eq(Waitlist.userId, entry.userId),
-                            eq(Waitlist.eventId, eventId),
-                            eq(Waitlist.numberOfSeats, entry.numberOfSeats)
+            // Determine how many seats to allocate for this head
+            const isFullAllocation = entry.numberOfSeats <= available;
+            const seatsToAllocate = isFullAllocation
+                ? entry.numberOfSeats
+                : available; // partial: allocate what's available
+
+            if (isFullAllocation) {
+                // Pop head and allocate fully
+                await client.lPop(wlKey(eventId));
+                // Delete corresponding row from DB waitlist
+                try {
+                    const rows = await db
+                        .select({ id: Waitlist.id })
+                        .from(Waitlist)
+                        .where(
+                            and(
+                                eq(Waitlist.userId, entry.userId),
+                                eq(Waitlist.eventId, eventId),
+                                eq(Waitlist.numberOfSeats, entry.numberOfSeats)
+                            )
                         )
-                    )
-                    .orderBy(asc(Waitlist.createdAt))
-                    .limit(1);
-                if (rows.length) {
-                    await clientConn.query('SAVEPOINT wl_del');
-                    // use SQL via clientConn to stay in same tx
-                    await clientConn.query(
-                        'DELETE FROM waitlist WHERE id = $1',
-                        [rows[0].id]
+                        .orderBy(asc(Waitlist.createdAt))
+                        .limit(1);
+                    if (rows.length) {
+                        await clientConn.query('SAVEPOINT wl_del');
+                        // use SQL via clientConn to stay in same tx
+                        await clientConn.query(
+                            'DELETE FROM waitlist WHERE id = $1',
+                            [rows[0].id]
+                        );
+                    }
+                } catch (e) {
+                    console.error(
+                        'Failed to remove waitlist row during allocation:',
+                        e
                     );
                 }
-            } catch (e) {
-                console.error(
-                    'Failed to remove waitlist row during allocation:',
-                    e
-                );
+            } else {
+                // Partial allocation: update Redis head and reduce DB waitlist row
+                const remaining = entry.numberOfSeats - seatsToAllocate;
+                const updatedEntry = { ...entry, numberOfSeats: remaining };
+                try {
+                    // Update head in Redis to reflect remaining seats
+                    if (typeof client.lSet === 'function') {
+                        await client.lSet(
+                            wlKey(eventId),
+                            0,
+                            JSON.stringify(updatedEntry)
+                        );
+                    } else {
+                        // Fallback: pop, then push updated entry back to the front
+                        await client.lPop(wlKey(eventId));
+                        await client.lPush(
+                            wlKey(eventId),
+                            JSON.stringify(updatedEntry)
+                        );
+                    }
+
+                    // Update the oldest matching waitlist row within the same SQL tx
+                    const rowRes = await clientConn.query(
+                        'SELECT id FROM waitlist WHERE "userId" = $1 AND "eventId" = $2 AND "numberOfSeats" = $3 ORDER BY "createdAt" ASC LIMIT 1',
+                        [entry.userId, eventId, entry.numberOfSeats]
+                    );
+                    if (rowRes.rowCount > 0) {
+                        await clientConn.query(
+                            'UPDATE waitlist SET "numberOfSeats" = $1 WHERE id = $2',
+                            [remaining, rowRes.rows[0].id]
+                        );
+                    }
+                } catch (e) {
+                    console.error(
+                        'Failed to perform partial waitlist update (Redis/DB):',
+                        e
+                    );
+                }
             }
-            reservedSeats += entry.numberOfSeats;
-            const totalCoszt = unitPrice * entry.numberOfSeats;
+
+            reservedSeats += seatsToAllocate;
+            const totalCost = unitPrice * seatsToAllocate;
 
             // Ensure we have recipient email; lookup if missing
             let email = entry.email;
@@ -161,18 +207,21 @@ export async function allocateFromWaitlist({ eventId }) {
                 }
             }
 
-            // Create booking record
+            // Create booking record for allocated seats
             await clientConn.query(
                 `INSERT INTO booking ("userId", "eventId", "numberOfSeats", cost) VALUES ($1, $2, $3, $4)`,
-                [entry.userId, eventId, entry.numberOfSeats, totalCost]
+                [entry.userId, eventId, seatsToAllocate, totalCost]
             );
 
             allocations.push({
                 userId: entry.userId,
                 email,
-                numberOfSeats: entry.numberOfSeats,
+                numberOfSeats: seatsToAllocate,
                 totalCost,
             });
+
+            // If we just did a partial allocation, we've exhausted availability; exit loop
+            if (!isFullAllocation) break;
         }
 
         // Persist new reservedSeats

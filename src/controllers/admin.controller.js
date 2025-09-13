@@ -6,46 +6,6 @@ import { eq } from 'drizzle-orm';
 import { event as Event } from '../models/events.model.js';
 import { client } from '../config/redis.js';
 
-// Admin: List all events (from Redis if available, fallback to DB)
-const adminListEvents = asyncHandler(async (req, res) => {
-    try {
-        const keys = await client.keys('event*');
-        if (keys.length > 0) {
-            const events = [];
-            for (const key of keys) {
-                const e = await client.hGetAll(key);
-                events.push({
-                    id: Number(e.event_id),
-                    name: e.event_name,
-                    description: e.description,
-                    hostId: Number(e.host_id),
-                    venue: e.venue,
-                    startsAt: new Date(e.starts_at),
-                    endsAt: new Date(e.ends_at),
-                    capacity: Number(e.capacity),
-                    reservedSeats: Number(e.reserved_seats),
-                    price: Number(e.price || 0),
-                });
-            }
-            return res
-                .status(200)
-                .json(
-                    new ApiResponse(200, 'Events found (from Redis)', events)
-                );
-        }
-    } catch (_) {
-        // ignore and fallback to DB
-    }
-
-    const events = await db.select().from(Event);
-    if (events.length === 0) {
-        throw new ApiError(404, 'No events found');
-    }
-    return res
-        .status(200)
-        .json(new ApiResponse(200, 'Events found (from DB)', events));
-});
-
 // Admin: Create an event (can assign hostId or default to admin self)
 const adminCreateEvent = asyncHandler(async (req, res) => {
     const {
@@ -140,75 +100,6 @@ const adminCreateEvent = asyncHandler(async (req, res) => {
         .json(new ApiResponse(201, 'Event created successfully', created[0]));
 });
 
-// Admin: Update any event by id
-const adminUpdateEvent = asyncHandler(async (req, res) => {
-    const {
-        id,
-        name,
-        description,
-        startAt,
-        endAt,
-        venue,
-        capacity,
-        price,
-        reservedSeats,
-        hostId,
-    } = req.body;
-
-    if (!id) {
-        return res.status(400).json(new ApiError(400, 'Event ID is required.'));
-    }
-
-    const found = await db.select().from(Event).where(eq(Event.id, id));
-    if (!found.length) {
-        return res.status(404).json(new ApiError(404, 'Event not found.'));
-    }
-
-    const updateData = {};
-    if (name !== undefined) updateData.name = name;
-    if (description !== undefined) updateData.description = description;
-    if (startAt !== undefined) updateData.startsAt = new Date(startAt);
-    if (endAt !== undefined) updateData.endsAt = new Date(endAt);
-    if (venue !== undefined) updateData.venue = venue;
-    if (capacity !== undefined) updateData.capacity = Number(capacity);
-    if (price !== undefined) updateData.price = Number(price);
-    if (reservedSeats !== undefined)
-        updateData.reservedSeats = Number(reservedSeats);
-    if (hostId !== undefined) updateData.hostId = Number(hostId);
-
-    if (Object.keys(updateData).length === 0) {
-        return res.status(400).json(new ApiError(400, 'No fields to update.'));
-    }
-
-    await db.update(Event).set(updateData).where(eq(Event.id, id));
-
-    await client.hSet(`event_${id}`, {
-        ...(updateData.name && { event_name: updateData.name }),
-        ...(updateData.description && { description: updateData.description }),
-        ...(updateData.startsAt && {
-            starts_at: updateData.startsAt.toISOString(),
-        }),
-        ...(updateData.endsAt && { ends_at: updateData.endsAt.toISOString() }),
-        ...(updateData.venue && { venue: updateData.venue }),
-        ...(updateData.capacity !== undefined && {
-            capacity: String(updateData.capacity),
-        }),
-        ...(updateData.price !== undefined && {
-            price: String(updateData.price),
-        }),
-        ...(updateData.reservedSeats !== undefined && {
-            reserved_seats: String(updateData.reservedSeats),
-        }),
-        ...(updateData.hostId !== undefined && {
-            host_id: String(updateData.hostId),
-        }),
-    });
-
-    return res
-        .status(200)
-        .json(new ApiResponse(200, 'Event updated successfully', updateData));
-});
-
 // Admin: Delete any event by id
 const adminDeleteEvent = asyncHandler(async (req, res) => {
     const { id } = req.body;
@@ -292,9 +183,7 @@ const adminAnalytics = asyncHandler(async (req, res) => {
 });
 
 export {
-    adminListEvents,
     adminCreateEvent,
-    adminUpdateEvent,
     adminDeleteEvent,
     adminAnalytics,
 };

@@ -159,27 +159,34 @@ async function startBookingConsumer() {
             }
 
             let totalCost = 0;
+            let bookedSeats = 0;
             try {
                 const clientConn = await pgPool.connect();
                 try {
                     await clientConn.query('BEGIN');
 
-                    // Atomic capacity check and increment
-                    const updateRes = await clientConn.query(
-                        `UPDATE events
-             SET "reservedSeats" = "reservedSeats" + $1
-             WHERE id = $2 AND ("reservedSeats" + $1) <= capacity
-             RETURNING "reservedSeats", price`,
-                        [numberOfSeats, eventId]
+                    // Lock event row, compute availability for potential partial booking
+                    const eRes = await clientConn.query(
+                        `SELECT id, capacity, "reservedSeats", price FROM events WHERE id = $1 FOR UPDATE`,
+                        [eventId]
                     );
+                    if (eRes.rowCount === 0) {
+                        await clientConn.query('ROLLBACK');
+                        throw new Error(`Event ${eventId} not found`);
+                    }
+                    const capacity = Number(eRes.rows[0].capacity || 0);
+                    const currentReserved = Number(
+                        eRes.rows[0].reservedSeats || 0
+                    );
+                    const price = Number(eRes.rows[0].price || 0);
+                    const available = Math.max(0, capacity - currentReserved);
 
-                    if (updateRes.rowCount === 0) {
-                        // No capacity atomically; move to waitlist (if open)
+                    if (available <= 0) {
+                        // No seats available at all; full waitlist flow after rollback
                         await clientConn.query('ROLLBACK');
                         const closed =
                             waitlistClosed ?? (await isWaitlistClosed(eventId));
                         if (closed) {
-                            // Inform sold out + waitlist closed
                             await producer.connect();
                             await producer.send({
                                 topic: 'notifications',
@@ -188,12 +195,11 @@ async function startBookingConsumer() {
                                         value: JSON.stringify({
                                             channel: NotificationChannel.EMAIL,
                                             type: NotificationType.WAITLIST_CLOSED,
-                                            payload:
-                                                buildEmailForWaitlistClosed({
-                                                    userEmail: email,
-                                                    userId,
-                                                    eventId,
-                                                }),
+                                            payload: buildEmailForWaitlisted({
+                                                userEmail: email,
+                                                userId,
+                                                eventId,
+                                            }),
                                         }),
                                     },
                                 ],
@@ -205,7 +211,7 @@ async function startBookingConsumer() {
                             return;
                         }
 
-                        // Enqueue to waitlist
+                        // Enqueue full request to waitlist
                         await enqueueWaitlist({
                             userId,
                             email,
@@ -213,7 +219,6 @@ async function startBookingConsumer() {
                             numberOfSeats,
                         });
 
-                        // Notify waitlisted
                         await producer.connect();
                         await producer.send({
                             topic: 'notifications',
@@ -238,16 +243,78 @@ async function startBookingConsumer() {
                         return;
                     }
 
-                    const price = Number(updateRes.rows[0].price || 0);
-                    totalCost = numberOfSeats * price;
+                    // Determine seats to book now (may be partial)
+                    bookedSeats = Math.min(available, Number(numberOfSeats));
+                    const remainingSeats = Number(numberOfSeats) - bookedSeats;
 
+                    // Update event reserved seats
+                    await clientConn.query(
+                        `UPDATE events SET "reservedSeats" = "reservedSeats" + $1 WHERE id = $2`,
+                        [bookedSeats, eventId]
+                    );
+
+                    totalCost = bookedSeats * price;
                     await clientConn.query(
                         `INSERT INTO booking ("userId", "eventId", "numberOfSeats", cost)
              VALUES ($1, $2, $3, $4)`,
-                        [userId, eventId, numberOfSeats, totalCost]
+                        [userId, eventId, bookedSeats, totalCost]
                     );
 
                     await clientConn.query('COMMIT');
+
+                    // If partial, enqueue remaining to waitlist and notify
+                    if (remainingSeats > 0) {
+                        const closed =
+                            waitlistClosed ?? (await isWaitlistClosed(eventId));
+                        if (closed) {
+                            await producer.connect();
+                            await producer.send({
+                                topic: 'notifications',
+                                messages: [
+                                    {
+                                        value: JSON.stringify({
+                                            channel: NotificationChannel.EMAIL,
+                                            type: NotificationType.WAITLIST_CLOSED,
+                                            payload: buildEmailForWaitlisted({
+                                                userEmail: email,
+                                                userId,
+                                                eventId,
+                                            }),
+                                        }),
+                                    },
+                                ],
+                            });
+                            await producer.disconnect();
+                        } else {
+                            await enqueueWaitlist({
+                                userId,
+                                email,
+                                eventId,
+                                numberOfSeats: remainingSeats,
+                            });
+
+                            await producer.connect();
+                            await producer.send({
+                                topic: 'notifications',
+                                messages: [
+                                    {
+                                        value: JSON.stringify({
+                                            channel: NotificationChannel.EMAIL,
+                                            type: NotificationType.WAITLISTED,
+                                            payload: buildEmailForWaitlisted({
+                                                userEmail: email,
+                                                userId,
+                                                eventId,
+                                                numberOfSeats: remainingSeats,
+                                            }),
+                                        }),
+                                    },
+                                ],
+                            });
+                            await producer.disconnect();
+                            reconcileRedisWithPostgres();
+                        }
+                    }
                 } catch (txErr) {
                     try {
                         await clientConn.query('ROLLBACK');
@@ -261,7 +328,7 @@ async function startBookingConsumer() {
                 await sendBookingNotification(
                     userId,
                     eventId,
-                    numberOfSeats,
+                    bookedSeats || numberOfSeats,
                     0,
                     email,
                     false
@@ -274,7 +341,7 @@ async function startBookingConsumer() {
                     user_id: userId.toString(),
                     event_id: eventId.toString(),
                     cost: totalCost.toString(),
-                    number_of_seats: numberOfSeats.toString(),
+                    number_of_seats: bookedSeats.toString(),
                 });
 
                 // Update event cache in Redis
@@ -287,7 +354,7 @@ async function startBookingConsumer() {
                                 `event_${eventId}`,
                                 'reserved_seats'
                             )) || '0'
-                        ) + numberOfSeats
+                        ) + bookedSeats
                     ).toString(),
                 });
             } catch (error) {
@@ -296,13 +363,13 @@ async function startBookingConsumer() {
             }
 
             console.log(
-                `Booking successful for user ${userId} on event ${eventId} for price ${totalCost} for ${numberOfSeats} seats`
+                `Booking successful for user ${userId} on event ${eventId} for price ${totalCost} for ${bookedSeats} seats`
             );
 
             await sendBookingNotification(
                 userId,
                 eventId,
-                numberOfSeats,
+                bookedSeats,
                 totalCost,
                 email,
                 true
