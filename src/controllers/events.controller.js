@@ -6,6 +6,7 @@ import { eq } from 'drizzle-orm';
 import { event as Event } from '../models/events.model.js';
 import { booking } from '../models/booking.models.js';
 import { client } from '../config/redis.js';
+import { producer } from '../utils/kafka.js';
 
 const getAllEvents = asyncHandler(async (req, res) => {
     // Try to get all events from Redis
@@ -25,6 +26,7 @@ const getAllEvents = asyncHandler(async (req, res) => {
                     endsAt: new Date(event.ends_at),
                     capacity: Number(event.capacity),
                     reservedSeats: Number(event.reserved_seats),
+                    price: Number(event.price || 0)
                 });
             }
             return res
@@ -60,9 +62,9 @@ const createEvent = asyncHandler(async (req, res) => {
             );
     }
 
-    const { name, description, startsAt, endsAt, venue, capacity } = req.body;
+    const { name, description, startsAt, endsAt, venue, capacity, price } = req.body;
 
-    if (!name || !description || !startsAt || !endsAt || !venue || !capacity) {
+    if (!name || !description || !startsAt || !endsAt || !venue || !capacity || !price) {
         return res
             .status(401)
             .json(new ApiError(400, 'All fields are required'));
@@ -101,6 +103,7 @@ const createEvent = asyncHandler(async (req, res) => {
             endsAt: endsAtDate,
             capacity: numericCapacity,
             reservedSeats,
+            price: Number(price)
         })
         .returning({
             event_id: Event.id,
@@ -112,6 +115,7 @@ const createEvent = asyncHandler(async (req, res) => {
             ends_at: Event.endsAt,
             capacity: Event.capacity,
             reserved_seats: Event.reservedSeats,
+            price: Event.price
         });
 
     const event = newEvent[0];
@@ -127,6 +131,7 @@ const createEvent = asyncHandler(async (req, res) => {
         ends_at: event.ends_at.toISOString(),
         capacity: event.capacity.toString(),
         reserved_seats: event.reserved_seats.toString(),
+        price: event.price.toString(),
     });
 
     if (newEvent.length == 0) {
@@ -140,7 +145,7 @@ const createEvent = asyncHandler(async (req, res) => {
 
 const updateEvent = asyncHandler(async (req, res) => {
     const user = req.user;
-    const { id, name, description, startAt, endAt, venue, capacity } = req.body;
+    const { id, name, description, startAt, endAt, venue, capacity, price, reservedSeats } = req.body;
 
     if (!id) {
         return new ApiError(400, 'Event ID is required.');
@@ -164,6 +169,8 @@ const updateEvent = asyncHandler(async (req, res) => {
     if (endAt !== undefined) updateData.endsAt = new Date(endAt);
     if (venue !== undefined) updateData.venue = venue;
     if (capacity !== undefined) updateData.capacity = capacity;
+    if (price !== undefined) updateData.price = price;
+    if (reservedSeats !== undefined) updateData.reservedSeats = reservedSeats;
 
     if (Object.keys(updateData).length === 0) {
         return new ApiError(400, 'No fields provided to update.');
@@ -186,6 +193,8 @@ const updateEvent = asyncHandler(async (req, res) => {
         ...(updateData.capacity && {
             capacity: updateData.capacity.toString(),
         }),
+        ...(updateData.price && { price: updateData.price.toString() }),
+        ...(updateData.reservedSeats && { reserved_seats: updateData.reservedSeats.toString() }),
     });
 
     return res
@@ -230,56 +239,47 @@ const bookEvent = asyncHandler(async (req, res) => {
     const { eventId, numberOfSeats } = req.body;
     const userId = req.user.id;
 
-    if (!eventId || !numberOfSeats) {
+    if (!eventId || numberOfSeats == null) {
         throw new ApiError(400, 'Event ID and number of seats are required.');
     }
 
     if (numberOfSeats <= 0 || numberOfSeats > 10) {
-        throw new ApiError(400, 'Maximum of 10 seats can be booked at once.');
+        throw new ApiError(400, 'Number of seats must be between 1 and 10.');
     }
 
-    const result = await db.transaction(async (tx) => {
-        const currentEvent = await tx
-            .select()
-            .from(Event)
-            .where(eq(Event.id, eventId))
-            .for('update');
+    const event = await client.hGetAll(`event_${eventId}`);
+    if (!event || Object.keys(event).length === 0) {
+        throw new ApiError(404, 'Event not found.');
+    }
 
-        if (currentEvent.length === 0) {
-            throw new ApiError(404, 'Event not found.');
-        }
+    const availableSeats = Number(event.capacity) - Number(event.reserved_seats);
+    if (availableSeats < numberOfSeats) {
+        throw new ApiError(400, 'Not enough seats available.');
+    }
 
-        const availableSeats =
-            currentEvent[0].capacity - currentEvent[0].reservedSeats;
-
-        if (availableSeats < numberOfSeats) {
-            throw new ApiError(400, 'Not enough seats available.');
-        }
-
-        const updatedEvent = await tx
-            .update(Event)
-            .set({
-                reservedSeats: currentEvent[0].reservedSeats + numberOfSeats,
-            })
-            .where(eq(Event.id, eventId))
-            .returning();
-
-        const newBooking = await tx
-            .insert(booking)
-            .values({
-                userId,
-                eventId,
-                numberOfSeats,
-                cost: 0, // Assuming cost is 0 for now
-            })
-            .returning();
-
-        return { updatedEvent: updatedEvent[0], newBooking: newBooking[0] };
+    // Produce a booking request message to Kafka
+    await producer.connect();
+    await producer.send({
+        topic: 'booking-requests',
+        messages: [
+            {
+                value: JSON.stringify({
+                    userId,
+                    eventId,
+                    numberOfSeats,
+                }),
+            },
+        ],
     });
+    await producer.disconnect();
+
+    const result = {
+        message: 'Booking request received and is being processed.',
+    };
 
     return res
         .status(200)
-        .json(new ApiResponse(200, 'Event booked successfully', result));
+        .json(new ApiResponse(200, result, 'Event Booking in process'));
 });
 
 export { getAllEvents, createEvent, updateEvent, deleteEvent, bookEvent };

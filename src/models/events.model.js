@@ -21,6 +21,7 @@ const event = table('events', {
 
     capacity: integer().notNull(),
     reservedSeats: integer().default(0),
+    price: integer().default(0),
 });
 
 export { event };
