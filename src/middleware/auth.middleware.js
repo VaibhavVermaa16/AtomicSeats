@@ -2,7 +2,7 @@ import asyncHandler from '../utils/asyncHandler.js';
 import jwt from 'jsonwebtoken';
 import { user as User } from '../models/user.model.js';
 import { db } from '../config/database.js';
-import apiError from '../utils/apiError.js';
+import ApiError from '../utils/apiError.js';
 import { eq } from 'drizzle-orm';
 import { client } from '../config/redis.js';
 
@@ -12,7 +12,7 @@ const verifyToken = asyncHandler(async (req, res, next) => {
             req.cookies?.accessToken ||
             req.header('Authorization')?.replace('Bearer ', '');
 
-        if (!token) throw new apiError(401, 'Unauthorized access');
+        if (!token) throw new ApiError(401, 'Unauthorized access');
 
         const decodedToken = jwt.decode(token, process.env.ACCESS_TOKEN_SECRET);
 
@@ -27,8 +27,9 @@ const verifyToken = asyncHandler(async (req, res, next) => {
                 .from(User)
                 .where(eq(User.id, decodedToken?.id));
 
-            if (user[0].length === 0)
-                return new apiError(401, 'Unauthorized access');
+            if (!user || user.length === 0) {
+                throw new ApiError(401, 'Unauthorized access');
+            }
 
             req.user = user[0];
             // Cache user in Redis for quick lookup
@@ -46,14 +47,14 @@ const verifyToken = asyncHandler(async (req, res, next) => {
             error.name === 'JsonWebTokenError' ||
             error.name === 'TokenExpiredError'
         ) {
-            throw new apiError(
+            throw new ApiError(
                 401,
                 'Unauthorized access: Invalid or expired token'
             );
         }
         // Handle other errors
         console.log(error);
-        throw new apiError(500, 'Internal server error');
+        throw new ApiError(500, 'Internal server error');
     }
 });
 

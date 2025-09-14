@@ -8,6 +8,7 @@ import cookieParser from 'cookie-parser';
 import userRoutes from './routes/user.routes.js';
 import eventsRoutes from './routes/events.routes.js';
 import adminRoutes from './routes/admin.routes.js';
+import ApiError from './utils/apiError.js';
 
 dotenv.config();
 
@@ -48,6 +49,25 @@ app.use((req, res) => {
         error: 'Not Found',
         message: 'The requested resource was not found',
         path: req.originalUrl,
+    });
+});
+
+// Centralized error handler
+// Ensures thrown ApiError and unexpected errors are consistently formatted
+// eslint-disable-next-line no-unused-vars
+app.use((err, req, res, next) => {
+    if (err instanceof ApiError) {
+        const { statusCode = 500, message, errors = [] } = err;
+        return res.status(statusCode).json({
+            statusCode,
+            message,
+            errors,
+        });
+    }
+    console.error('Unhandled error:', err);
+    return res.status(500).json({
+        statusCode: 500,
+        message: 'Internal Server Error',
     });
 });
 

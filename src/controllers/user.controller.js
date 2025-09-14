@@ -18,7 +18,7 @@ const generateAccessAndRefreshToken = async (userId) => {
     try {
         const user = await db.select().from(User).where(eq(User.id, userId));
 
-        if (user.length === 0) {
+        if (!user.length) {
             throw new ApiError(404, 'User not found');
         }
         const accessToken = generateAccessToken(user[0]);
@@ -43,7 +43,7 @@ const getUsers = asyncHandler(async (req, res) => {
             role: User.role,
         })
         .from(User);
-    if (!users) {
+    if (!users || users.length === 0) {
         throw new ApiError(404, 'No users found');
     }
     return res.status(200).json(new ApiResponse(200, 'Users found', users));
@@ -51,14 +51,14 @@ const getUsers = asyncHandler(async (req, res) => {
 
 const registerUser = asyncHandler(async (req, res) => {
     const { username, name, password, email, role } = req.body;
-    if (!username || !password || !role || !name) {
+    if (!username || !password || !role || !name || !email) {
         throw new ApiError(400, 'Please fill in all fields');
     }
 
     console.log(role);
 
     if (!['guest', 'host', 'admin'].includes(role)) {
-        throw new ApiError(400, 'Role must be either guest or host');
+        throw new ApiError(400, 'Role must be guest, host, or admin');
     }
 
     const existed_user = await db
@@ -66,7 +66,7 @@ const registerUser = asyncHandler(async (req, res) => {
         .from(User)
         .where(eq(User.email, email));
 
-    if (existed_user.length > 0) {
+    if (existed_user && existed_user.length > 0) {
         throw new ApiError(
             409,
             'User with this email or username already exists'
@@ -93,7 +93,7 @@ const registerUser = asyncHandler(async (req, res) => {
 
     console.log(newUser);
 
-    if (!newUser) {
+    if (!newUser || newUser.length === 0) {
         throw new ApiError(500, 'Error creating user');
     }
 
@@ -116,7 +116,7 @@ const loginUser = asyncHandler(async (req, res) => {
         .from(User)
         .where(eq(User.email, email));
 
-    if (!existed_user) {
+    if (!existed_user || existed_user.length === 0) {
         throw new ApiError(404, 'User not found');
     }
 
@@ -145,7 +145,7 @@ const loginUser = asyncHandler(async (req, res) => {
         })
         .from(User)
         .where(eq(User.id, existed_user[0].id));
-    if (newUser.length === 0) {
+    if (!newUser || newUser.length === 0) {
         throw new ApiError(500, 'Error logging in user');
     }
     const options = {

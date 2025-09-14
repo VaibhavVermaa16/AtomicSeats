@@ -1,4 +1,5 @@
 import { client } from '../config/redis.js';
+import ApiError from './apiError.js';
 import { db, pgPool } from '../config/database.js';
 import { waitlist as Waitlist } from '../models/waitlist.model.js';
 import { eq, and, asc } from 'drizzle-orm';
@@ -19,7 +20,8 @@ export async function setWaitlistClosed(eventId, closed = true) {
 
 // Enqueue: value shape { userId, email, eventId, numberOfSeats, requestedAt }
 export async function enqueueWaitlist(entry) {
-    if (!entry?.eventId) throw new Error('waitlist entry missing eventId');
+    if (!entry?.eventId)
+        throw new ApiError(400, 'waitlist entry missing eventId');
     await client.rPush(
         wlKey(entry.eventId),
         JSON.stringify({

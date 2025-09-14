@@ -93,6 +93,10 @@ src/
 - Nodemailer (Gmail)
 - Docker + docker-compose
 
+## 🧿 Error Handling
+
+This API throws `ApiError` with appropriate HTTP status codes and uses a centralized Express error handler to format responses.
+
 ## 🛠️ DevOps & Deployment Features
 
 - Dockerized services (API, workers, Kafka/Zookeeper) with compose for local orchestration

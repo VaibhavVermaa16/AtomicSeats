@@ -206,14 +206,10 @@ const getAllEvents = asyncHandler(async (req, res) => {
 
 const createEvent = asyncHandler(async (req, res) => {
     if (!req.user) {
-        return res
-            .status(401)
-            .json(
-                new ApiError(
-                    401,
-                    'Unauthorized, please login to create an event'
-                )
-            );
+        throw new ApiError(
+            401,
+            'Unauthorized, please login to create an event'
+        );
     }
 
     const { name, description, startsAt, endsAt, venue, capacity, price } =
@@ -225,12 +221,10 @@ const createEvent = asyncHandler(async (req, res) => {
         !startsAt ||
         !endsAt ||
         !venue ||
-        !capacity ||
-        !price
+        capacity == null ||
+        price == null
     ) {
-        return res
-            .status(401)
-            .json(new ApiError(400, 'All fields are required'));
+        throw new ApiError(400, 'All fields are required');
     }
 
     const hostId = req.user.id;
@@ -242,17 +236,13 @@ const createEvent = asyncHandler(async (req, res) => {
     const numericCapacity = Number(capacity);
 
     if (isNaN(startsAtDate.getTime()) || isNaN(endsAtDate.getTime())) {
-        return res.status(401).json(new ApiError(400, 'Invalid date format'));
+        throw new ApiError(400, 'Invalid date format');
     }
     if (endsAtDate <= startsAtDate) {
-        return res
-            .status(401)
-            .json(new ApiError(400, 'Event end time must be after start time'));
+        throw new ApiError(400, 'Event end time must be after start time');
     }
     if (numericCapacity <= 0) {
-        return res
-            .status(401)
-            .json(new ApiError(400, 'Capacity must be a positive number'));
+        throw new ApiError(400, 'Capacity must be a positive number');
     }
 
     const newEvent = await db
@@ -297,8 +287,8 @@ const createEvent = asyncHandler(async (req, res) => {
         price: event.price.toString(),
     });
 
-    if (newEvent.length == 0) {
-        throw new ApiError(401, 'Event Creation failed');
+    if (newEvent.length === 0) {
+        throw new ApiError(500, 'Event creation failed');
     }
 
     return res
@@ -312,8 +302,8 @@ const updateEvent = asyncHandler(async (req, res) => {
         id,
         name,
         description,
-        startAt,
-        endAt,
+        startsAt,
+        endsAt,
         venue,
         capacity,
         price,
@@ -322,25 +312,28 @@ const updateEvent = asyncHandler(async (req, res) => {
     } = req.body;
 
     if (!id) {
-        return new ApiError(400, 'Event ID is required.');
+        throw new ApiError(400, 'Event ID is required.');
     }
 
     const event = await db.select().from(Event).where(eq(Event.id, id));
 
     if (!event.length) {
-        return new ApiError(404, 'Event not found.');
+        throw new ApiError(404, 'Event not found.');
     }
 
     if (event[0].hostId !== user.id) {
-        return new ApiError(401, 'Unauthorized to modify this event.');
+        throw new ApiError(
+            403,
+            'Forbidden: Unauthorized to modify this event.'
+        );
     }
 
     // Build update object dynamically
     const updateData = {};
     if (name !== undefined) updateData.name = name;
     if (description !== undefined) updateData.description = description;
-    if (startAt !== undefined) updateData.startsAt = new Date(startAt);
-    if (endAt !== undefined) updateData.endsAt = new Date(endAt);
+    if (startsAt !== undefined) updateData.startsAt = new Date(startsAt);
+    if (endsAt !== undefined) updateData.endsAt = new Date(endsAt);
     if (venue !== undefined) updateData.venue = venue;
     if (capacity !== undefined) updateData.capacity = capacity;
     if (price !== undefined) updateData.price = price;
@@ -351,7 +344,7 @@ const updateEvent = asyncHandler(async (req, res) => {
     if (reservedSeats !== undefined) updateData.reservedSeats = reservedSeats;
 
     if (Object.keys(updateData).length === 0) {
-        return new ApiError(400, 'No fields provided to update.');
+        throw new ApiError(400, 'No fields provided to update.');
     }
 
     await db.update(Event).set(updateData).where(eq(Event.id, id));
@@ -414,13 +407,13 @@ const updateEvent = asyncHandler(async (req, res) => {
 
 const deleteEvent = asyncHandler(async (req, res) => {
     const { id } = req.body;
-
     const event = await db.select().from(Event).where(eq(Event.id, id));
-
+    if (!event.length) {
+        throw new ApiError(404, 'Event not found.');
+    }
     const hostId = event[0].hostId;
-
-    if (hostId != req.user.id) {
-        throw new ApiError(400, 'User not allowed to delete this event.');
+    if (hostId !== req.user.id) {
+        throw new ApiError(403, 'Forbidden: not allowed to delete this event.');
     }
 
     const deleted_event = await db
@@ -432,13 +425,13 @@ const deleteEvent = asyncHandler(async (req, res) => {
             event_description: Event.description,
         });
 
-    if (deleted_event[0].length === 0)
-        throw new ApiError(401, `Error, deleting event: ${id}`);
+    if (deleted_event.length === 0)
+        throw new ApiError(500, `Error deleting event: ${id}`);
 
     return res
-        .status(201)
+        .status(200)
         .json(
-            new ApiResponse(201, 'Successfully deleted event.', deleted_event)
+            new ApiResponse(200, 'Successfully deleted event.', deleted_event)
         );
 });
 
