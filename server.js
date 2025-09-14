@@ -1,9 +1,7 @@
 import app from './src/app.js';
 import dotenv from 'dotenv';
-import './src/scheduler.js'; // Import the scheduler to start scheduled tasks
+import './src/scheduler.js'; 
 import { reconcileRedisWithPostgres } from './src/utils/redisReconciler.js';
-// import { startBookingConsumer } from './src/worker/bookingConsumer.js';
-// import { startNotificationConsumer } from './src/worker/notificationConsumer.js';
 
 dotenv.config({ path: './env' });
 const PORT = process.env.PORT || 3000;
@@ -15,8 +13,6 @@ app.listen(PORT, () => {
     reconcileRedisWithPostgres().catch((err) => {
         console.error('Error during initial Redis reconciliation:', err);
     });
-    // startBookingConsumer().catch(console.error);
-    // startNotificationConsumer().catch(console.error);
 });
 
 // Graceful shutdown
