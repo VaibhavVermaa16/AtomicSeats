@@ -14,6 +14,14 @@ services:
       interval: 10s
       timeout: 5s
       retries: 3
+    volumes:
+      - ./zookeeper-log4j.properties:/opt/bitnami/zookeeper/config/log4j.properties
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+
 
   kafka:
     image: bitnami/kafka:3.4.0
@@ -40,6 +48,13 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    volumes:
+      - ./kafka-log4j.properties:/opt/bitnami/kafka/config/log4j.properties
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "3"
 
   app:
     build: .
