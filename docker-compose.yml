@@ -8,28 +8,29 @@ services:
       - "2181:2181"
     environment:
       - ALLOW_ANONYMOUS_LOGIN=yes
-    restart: always
+    restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "echo ruok | nc localhost 2181 || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 3
-    volumes:
-      - ./zookeeper-log4j.properties:/opt/bitnami/zookeeper/config/log4j.properties
+    deploy:
+      resources:
+        limits:
+          memory: 256M
     logging:
       driver: "json-file"
       options:
-        max-size: "50m"
-        max-file: "3"
-
+        max-size: "20m"
+        max-file: "2"
 
   kafka:
     image: bitnami/kafka:3.4.0
     container_name: kafka
     ports:
       - "9092:9092"
-      - "29092:29092"   # external access from VM
-    restart: always
+      - "29092:29092"
+    restart: unless-stopped
     environment:
       - KAFKA_ENABLE_KRAFT=false
       - KAFKA_BROKER_ID=1
@@ -39,7 +40,7 @@ services:
       - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
       - KAFKA_INTER_BROKER_LISTENER_NAME=PLAINTEXT
       - ALLOW_PLAINTEXT_LISTENER=yes
-      - KAFKA_HEAP_OPTS=-Xmx512m -Xms512m
+      - KAFKA_HEAP_OPTS=-Xmx256m -Xms256m
     depends_on:
       zookeeper:
         condition: service_healthy
@@ -48,13 +49,15 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-    volumes:
-      - ./kafka-log4j.properties:/opt/bitnami/kafka/config/log4j.properties
+    deploy:
+      resources:
+        limits:
+          memory: 512M
     logging:
       driver: "json-file"
       options:
-        max-size: "100m"
-        max-file: "3"
+        max-size: "50m"
+        max-file: "2"
 
   app:
     build: .
@@ -62,13 +65,17 @@ services:
     environment:
       - KAFKA_BROKER=kafka:9092
       - DATABASE_URL=${DATABASE_URL}
-    restart: always
+    restart: unless-stopped
     depends_on:
       kafka:
         condition: service_healthy
     command: sh -c "node server.js"
     ports:
       - "3000:3000"
+    deploy:
+      resources:
+        limits:
+          memory: 128M
 
   booking-worker:
     build: .
@@ -76,11 +83,15 @@ services:
     environment:
       - KAFKA_BROKER=kafka:9092
       - DATABASE_URL=${DATABASE_URL}
-    restart: always
+    restart: unless-stopped
     depends_on:
       kafka:
         condition: service_healthy
     command: sh -c "node src/worker/bookingConsumer.js"
+    deploy:
+      resources:
+        limits:
+          memory: 128M
 
   notification-worker:
     build: .
@@ -90,30 +101,12 @@ services:
       - DATABASE_URL=${DATABASE_URL}
       - MAIL_USER=${MAIL_USER}
       - MAIL_PASS=${MAIL_PASS}
-    restart: always
+    restart: unless-stopped
     depends_on:
       kafka:
         condition: service_healthy
     command: sh -c "node src/worker/notificationConsumer.js"
-
-  tests:
-    build: .
-    container_name: atomicseats-tests
-    stdin_open: true
-    tty: true
-    environment:
-      - BASE_URL=http://app:3000
-      - CONCURRENCY=5
-      - SEATS_PER_BOOKING=3
-      - EVENT_CAPACITY=10
-      - EVENT_PRICE=100
-      - WAIT_TIMEOUT_MS=120000
-      - WAIT_INTERVAL_MS=1500
-      - DATABASE_URL=${DATABASE_URL}
-    depends_on:
-      app:
-        condition: service_started
-      booking-worker:
-        condition: service_started
-    working_dir: /usr/src/app
-    command: sh -c "node tests/runConcurrencyTest.js"
+    deploy:
+      resources:
+        limits:
+          memory: 128M
